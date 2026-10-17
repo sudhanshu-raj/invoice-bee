@@ -48,6 +48,10 @@ public class PurchaseInvoice {
 
     @Column(name = "invoice_number", length = 100)
     private String invoiceNumber;
+    
+    @Enumerated(EnumType.STRING)
+    @Column(name = "payment_mode", length = 50)
+    private PaymentMode paymentMode;
 
     @Column(name = "invoice_date")
     private LocalDate invoiceDate;
@@ -113,6 +117,14 @@ public class PurchaseInvoice {
 
     public void setInvoiceNumber(String invoiceNumber) {
         this.invoiceNumber = invoiceNumber;
+    }
+
+    public PaymentMode getPaymentMode() {
+        return paymentMode;
+    }
+
+    public void setPaymentMode(PaymentMode paymentMode) {
+        this.paymentMode = paymentMode;
     }
 
     public LocalDate getInvoiceDate() {

@@ -20,7 +20,7 @@
                 <constraints primaryKey="true" nullable="false"/>
             </column>
             <column name="shop_id" type="VARCHAR(36)">
-                <constraints nullable="false" foreignKeyName="fk_users_shop" references="shops(id)"/>
+                <constraints foreignKeyName="fk_users_shop" references="shops(id)"/>
             </column>
             <column name="email" type="VARCHAR(150)">
                 <constraints nullable="false" unique="true" uniqueConstraintName="uq_users_email"/>

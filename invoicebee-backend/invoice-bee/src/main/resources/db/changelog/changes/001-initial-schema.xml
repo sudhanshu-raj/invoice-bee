@@ -100,6 +100,7 @@
                 <constraints foreignKeyName="fk_purchase_invoices_supplier" references="suppliers(id)"/>
             </column>
             <column name="invoice_number" type="VARCHAR(100)"/>
+            <column name="payment_mode" type="VARCHAR(50)"/>
             <column name="invoice_date" type="DATE"/>
             <column name="status" type="VARCHAR(20)">
                 <constraints nullable="false"/>

@@ -25,6 +25,7 @@ public record InvoiceData(
             BigDecimal pricePerUnit,
             BigDecimal gstAmount,
             int gstPercentage,
-            BigDecimal totalAmount
+            BigDecimal totalAmount,
+            BigDecimal confidenceScore
     ) {}
 }

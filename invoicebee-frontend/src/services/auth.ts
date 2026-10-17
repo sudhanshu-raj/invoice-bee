@@ -5,6 +5,7 @@ export interface User {
   phone: string;
   role: string;
   shopId: string | null;
+  shopName?: string | null;
 }
 
 export interface AuthResponse {
@@ -22,6 +23,15 @@ export interface SignupPayload {
 export interface SigninPayload {
   email: string;
   password: string;
+}
+
+export interface CreateShopPayload {
+  name: string;
+  currency?: string;
+  email?: string;
+  phone?: string;
+  gstin?: string;
+  address?: string;
 }
 
 const TOKEN_KEY = "invoicebee_token";
@@ -96,6 +106,27 @@ export async function signin(payload: SigninPayload): Promise<AuthResponse> {
   return authData;
 }
 
+export async function createShop(payload: CreateShopPayload): Promise<AuthResponse> {
+  const token = getToken();
+  if (!token) {
+    throw new Error("No authentication token found");
+  }
+
+  const response = await fetch("/api/shops", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${token}`,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const authData = await handleResponse<AuthResponse>(response);
+  setToken(authData.token);
+  setStoredUser(authData.user);
+  return authData;
+}
+
 export async function fetchCurrentUser(): Promise<User> {
   const token = getToken();
   if (!token) {
@@ -111,6 +142,93 @@ export async function fetchCurrentUser(): Promise<User> {
   const user = await handleResponse<User>(response);
   setStoredUser(user);
   return user;
+}
+
+export async function updateShop(payload: CreateShopPayload): Promise<AuthResponse> {
+  const token = getToken();
+  if (!token) {
+    throw new Error("No authentication token found");
+  }
+
+  const response = await fetch("/api/shops/current", {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${token}`,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const authData = await handleResponse<AuthResponse>(response);
+  setToken(authData.token);
+  setStoredUser(authData.user);
+  return authData;
+}
+
+export interface ShopDto {
+  id: string;
+  name: string;
+  currency: string;
+  email: string;
+  phone: string;
+  gstin: string;
+  address: string;
+}
+
+export async function fetchCurrentShop(): Promise<ShopDto> {
+  const token = getToken();
+  if (!token) {
+    throw new Error("No authentication token found");
+  }
+
+  const response = await fetch("/api/shops/current", {
+    headers: {
+      "Authorization": `Bearer ${token}`,
+    },
+  });
+
+  return await handleResponse<ShopDto>(response);
+}
+
+export interface CreateTeamUserPayload {
+  name: string;
+  email: string;
+  phone: string;
+  password: string;
+  role: "OWNER" | "MANAGER" | "SALESMAN" | "CASHIER";
+}
+
+export async function createTeamUser(payload: CreateTeamUserPayload): Promise<User> {
+  const token = getToken();
+  if (!token) {
+    throw new Error("No authentication token found");
+  }
+
+  const response = await fetch("/api/users", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${token}`,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  return await handleResponse<User>(response);
+}
+
+export async function fetchTeamUsers(): Promise<User[]> {
+  const token = getToken();
+  if (!token) {
+    throw new Error("No authentication token found");
+  }
+
+  const response = await fetch("/api/users", {
+    headers: {
+      "Authorization": `Bearer ${token}`,
+    },
+  });
+
+  return await handleResponse<User[]>(response);
 }
 
 export function logout(): void {

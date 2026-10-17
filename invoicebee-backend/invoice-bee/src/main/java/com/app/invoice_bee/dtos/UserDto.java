@@ -10,17 +10,19 @@ public class UserDto {
     private String phone;
     private String role;
     private UUID shopId;
+    private String shopName;
 
     public UserDto() {
     }
 
-    public UserDto(UUID id, String fullName, String email, String phone, String role, UUID shopId) {
+    public UserDto(UUID id, String fullName, String email, String phone, String role, UUID shopId, String shopName) {
         this.id = id;
         this.fullName = fullName;
         this.email = email;
         this.phone = phone;
         this.role = role;
         this.shopId = shopId;
+        this.shopName = shopName;
     }
 
     public UUID getId() {
@@ -69,5 +71,13 @@ public class UserDto {
 
     public void setShopId(UUID shopId) {
         this.shopId = shopId;
+    }
+
+    public String getShopName() {
+        return shopName;
+    }
+
+    public void setShopName(String shopName) {
+        this.shopName = shopName;
     }
 }

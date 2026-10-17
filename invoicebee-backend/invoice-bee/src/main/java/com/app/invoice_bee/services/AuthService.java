@@ -89,7 +89,8 @@ public class AuthService {
                 user.getEmail(),
                 user.getPhone(),
                 user.getRole() != null ? user.getRole().name() : null,
-                user.getShop() != null ? user.getShop().getId() : null
+                user.getShop() != null ? user.getShop().getId() : null,
+                user.getShop() != null ? user.getShop().getName() : null
         );
     }
 }

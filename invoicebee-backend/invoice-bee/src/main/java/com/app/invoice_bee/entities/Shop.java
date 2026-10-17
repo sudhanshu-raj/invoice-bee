@@ -6,6 +6,7 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.OneToMany;
+import jakarta.persistence.PrePersist;
 import jakarta.persistence.Table;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -151,5 +152,15 @@ public class Shop {
 
     public void setPurchaseInvoices(List<PurchaseInvoice> purchaseInvoices) {
         this.purchaseInvoices = purchaseInvoices;
+    }
+
+    @PrePersist
+    public void onCreate() {
+        if (this.createdAt == null) {
+            this.createdAt = OffsetDateTime.now();
+        }
+        if (this.currency == null || this.currency.isBlank()) {
+            this.currency = "INR";
+        }
     }
 }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { User, getToken, getStoredUser, signup, signin, fetchCurrentUser, logout } from "./services/auth";
+import { User, getToken, getStoredUser, signup, signin, fetchCurrentUser, logout, createShop, updateShop, fetchCurrentShop, createTeamUser, fetchTeamUsers } from "./services/auth";
 
 type IconName =
   | "grid" | "box" | "tag" | "scan" | "cart" | "sale" | "users" | "spark"
@@ -103,7 +103,15 @@ function Sidebar({ active, onNavigate, open, onClose, onLogout, user }: { active
       <button className="text-slate-400 lg:hidden" onClick={onClose}><Icon name="close" /></button>
     </div>
     <div className="mx-3 mt-4 rounded-lg border border-white/10 bg-white/5 p-3">
-      <div className="flex items-center gap-2.5"><span className="grid size-8 place-items-center rounded-md bg-amber-100 text-xs font-bold text-amber-800">VM</span><div className="min-w-0"><p className="truncate text-sm font-semibold text-white">Verma Mini Mart</p><p className="text-xs text-slate-400">Indore, Madhya Pradesh</p></div></div>
+      <div className="flex items-center gap-2.5">
+        <span className="grid size-8 place-items-center rounded-md bg-amber-100 text-xs font-bold text-amber-800">
+          {user?.shopName ? user.shopName.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase() : "SH"}
+        </span>
+        <div className="min-w-0">
+          <p className="truncate text-sm font-semibold text-white">{user?.shopName || "No Shop Configured"}</p>
+          <p className="text-xs text-slate-400">{user?.shopId ? "Active workspace" : "Setup required"}</p>
+        </div>
+      </div>
     </div>
     <nav className="mt-4 flex-1 space-y-1 overflow-y-auto px-3 pb-4">
       {nav.map(([label, icon]) => <button key={label} onClick={() => { onNavigate(label); onClose(); }} className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm font-medium transition ${active === label ? "bg-emerald-500/15 text-emerald-300" : "text-slate-400 hover:bg-white/5 hover:text-white"}`}><Icon name={icon} size={17} />{label}{label === "Invoice Scanner" && <span className="ml-auto rounded bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-bold text-emerald-300">AI</span>}</button>)}
@@ -128,10 +136,186 @@ function MetricCard({ title, value, meta, icon, tone = "emerald" }: { title: str
   return <Card className="p-4"><div className="flex items-start justify-between"><p className="text-sm font-medium text-slate-500">{title}</p><span className={`grid size-8 place-items-center rounded-lg ${tones[tone]}`}><Icon name={icon} size={16} /></span></div><p className="mt-3 text-2xl font-bold tracking-tight text-slate-900">{value}</p><p className="mt-1 text-xs text-slate-500">{meta}</p></Card>;
 }
 
-function Overview({ onNavigate }: { onNavigate: (n: string) => void }) {
+function ShopSetupView({ user, onShopCreated }: { user?: User | null; onShopCreated: (user: User) => void }) {
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState(user?.email || "");
+  const [phone, setPhone] = useState(user?.phone || "");
+  const [gstin, setGstin] = useState("");
+  const [address, setAddress] = useState("");
+  const [currency, setCurrency] = useState("INR");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim()) {
+      setError("Shop name is required");
+      return;
+    }
+    setError("");
+    setLoading(true);
+    try {
+      const res = await createShop({
+        name: name.trim(),
+        email: email.trim(),
+        phone: phone.trim(),
+        gstin: gstin.trim(),
+        address: address.trim(),
+        currency,
+      });
+      onShopCreated(res.user);
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError("Failed to create shop profile");
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="mx-auto max-w-3xl space-y-6 py-4">
+      <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
+        <div className="flex items-start gap-4">
+          <div className="grid size-12 shrink-0 place-items-center rounded-xl bg-emerald-50 text-emerald-600">
+            <Icon name="box" size={24} />
+          </div>
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight text-slate-900">
+              Welcome, {user?.fullName || "Partner"}
+            </h1>
+            <p className="mt-1 text-sm text-slate-500">
+              Set up your shop profile to initialize your workspace, inventory catalog, and invoice processing.
+            </p>
+          </div>
+        </div>
+
+        {error && (
+          <div className="mt-6 flex items-start gap-2 rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs font-medium text-rose-700">
+            <Icon className="shrink-0" name="warning" size={15} />
+            {error}
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="mt-6 space-y-4">
+          <div>
+            <label className="block text-xs font-semibold text-slate-700">
+              Shop or Business Name <span className="text-rose-500">*</span>
+              <Input
+                className="mt-1.5 h-11"
+                placeholder="e.g. Verma Mini Mart"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                required
+              />
+            </label>
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <label className="block text-xs font-semibold text-slate-700">
+              Business Phone
+              <Input
+                className="mt-1.5 h-11"
+                placeholder="+91 98765 43210"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+              />
+            </label>
+            <label className="block text-xs font-semibold text-slate-700">
+              Business Email
+              <Input
+                className="mt-1.5 h-11"
+                placeholder="shop@business.com"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+            </label>
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <label className="block text-xs font-semibold text-slate-700">
+              GSTIN <span className="font-normal text-slate-400">(optional)</span>
+              <Input
+                className="mt-1.5 h-11"
+                placeholder="23AABCU9603R1ZM"
+                value={gstin}
+                onChange={(e) => setGstin(e.target.value)}
+              />
+            </label>
+            <label className="block text-xs font-semibold text-slate-700">
+              Currency
+              <Select
+                className="mt-1.5 h-11 w-full"
+                value={currency}
+                onChange={(e) => setCurrency(e.target.value)}
+              >
+                <option value="INR">INR (₹) - Indian Rupee</option>
+                <option value="USD">USD ($) - US Dollar</option>
+                <option value="EUR">EUR (€) - Euro</option>
+                <option value="GBP">GBP (£) - British Pound</option>
+              </Select>
+            </label>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700">
+              Shop Address / Location
+              <Input
+                className="mt-1.5 h-11"
+                placeholder="e.g. 42, Scheme No. 54, Vijay Nagar, Indore"
+                value={address}
+                onChange={(e) => setAddress(e.target.value)}
+              />
+            </label>
+          </div>
+
+          <div className="pt-2">
+            <Button className="h-11 w-full text-sm font-semibold" disabled={loading} type="submit">
+              {loading ? "Configuring your shop…" : "Complete Shop Setup"}
+              {!loading && <Icon name="arrow" size={16} />}
+            </Button>
+          </div>
+        </form>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-3">
+        <div className="rounded-xl border border-slate-200 bg-white p-4">
+          <div className="grid size-9 place-items-center rounded-lg bg-emerald-50 text-emerald-600">
+            <Icon name="scan" size={18} />
+          </div>
+          <h3 className="mt-3 text-sm font-bold text-slate-800">Smart OCR Invoicing</h3>
+          <p className="mt-1 text-xs text-slate-500">Scan and parse paper or PDF purchase bills directly into your database.</p>
+        </div>
+        <div className="rounded-xl border border-slate-200 bg-white p-4">
+          <div className="grid size-9 place-items-center rounded-lg bg-blue-50 text-blue-600">
+            <Icon name="box" size={18} />
+          </div>
+          <h3 className="mt-3 text-sm font-bold text-slate-800">Live Inventory</h3>
+          <p className="mt-1 text-xs text-slate-500">Monitor stock levels, automatic dead-stock flags, and reorder levels.</p>
+        </div>
+        <div className="rounded-xl border border-slate-200 bg-white p-4">
+          <div className="grid size-9 place-items-center rounded-lg bg-violet-50 text-violet-600">
+            <Icon name="trend" size={18} />
+          </div>
+          <h3 className="mt-3 text-sm font-bold text-slate-800">Margin Analytics</h3>
+          <p className="mt-1 text-xs text-slate-500">Compare historical supplier costs against selling prices to protect profits.</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Overview({ onNavigate, user, onShopCreated }: { onNavigate: (n: string) => void; user?: User | null; onShopCreated: (user: User) => void }) {
+  if (!user?.shopId) {
+    return <ShopSetupView user={user} onShopCreated={onShopCreated} />;
+  }
+
   const chart = [42, 46, 44, 51, 48, 56, 58, 61, 59, 66, 68, 72];
   return <>
-    <PageHeader title="Good morning, Amit" description="Here’s what needs your attention across Verma Mini Mart." actions={<><Select defaultValue="30"><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option></Select><Button><Icon name="plus" size={16} />Add product</Button></>} />
+    <PageHeader title={`Good morning, ${user?.fullName || "Partner"}`} description={`Here’s what needs your attention across ${user?.shopName || "your shop"}.`} actions={<><Select defaultValue="30"><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option></Select><Button><Icon name="plus" size={16} />Add product</Button></>} />
     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
       <MetricCard title="Inventory value" value="₹12,48,620" meta="↑ 3.2% from last month" icon="box" />
       <MetricCard title="Active products" value="1,248" meta="32 added this month" icon="tag" tone="blue" />
@@ -256,7 +440,457 @@ function Reports() {
   return <><PageHeader title="Reports" description="Generate and export reports for business review." actions={<Button onClick={()=>setGenerated(!generated)}><Icon name="report" size={16} />Generate report</Button>} /><Card className="p-4"><div className="grid gap-3 sm:grid-cols-4"><label className="text-xs font-semibold text-slate-500">Report type<Select className="mt-1.5 w-full"><option>Inventory valuation</option><option>Gross margin</option><option>Stock movement</option><option>Purchases</option></Select></label><label className="text-xs font-semibold text-slate-500">From<Input className="mt-1.5" type="date" defaultValue="2025-03-01" /></label><label className="text-xs font-semibold text-slate-500">To<Input className="mt-1.5" type="date" defaultValue="2025-03-31" /></label><label className="text-xs font-semibold text-slate-500">Category<Select className="mt-1.5 w-full"><option>All categories</option><option>Grocery</option></Select></label></div></Card>{generated ? <><div className="mt-4 grid gap-3 sm:grid-cols-3"><MetricCard title="Opening value" value="₹11,82,400" meta="As of 01 Mar 2025" icon="box" /><MetricCard title="Closing value" value="₹12,48,620" meta="As of 31 Mar 2025" icon="trend" tone="blue" /><MetricCard title="Net movement" value="+₹66,220" meta="+5.6% during period" icon="refresh" tone="emerald" /></div><Card className="mt-4 p-5"><div className="flex items-center justify-between"><div><h2 className="font-bold text-slate-900">Inventory valuation by category</h2><p className="text-xs text-slate-500">As of 31 March 2025</p></div><Button variant="secondary">Export CSV</Button></div><div className="mt-6 space-y-5">{[["Grocery",78, "₹5,24,420"],["Personal care",52,"₹3,48,280"],["Home care",36,"₹2,42,160"],["Snacks & beverages",20,"₹1,33,760"]].map(x=><div key={x[0]}><div className="mb-2 flex justify-between text-sm"><span className="font-medium text-slate-700">{x[0]}</span><strong>{x[2]}</strong></div><div className="h-2 rounded-full bg-slate-100"><div className="h-2 rounded-full bg-emerald-500" style={{width:`${x[1]}%`}} /></div></div>)}</div></Card></> : <Card className="mt-4 grid place-items-center py-24 text-center"><Icon name="report" className="text-slate-300" size={36} /><h2 className="mt-3 font-bold text-slate-800">Choose filters to generate a report</h2><p className="mt-1 text-sm text-slate-500">Your results will appear here.</p></Card>}</>;
 }
 
-function Settings() { return <><PageHeader title="Settings" description="Manage your business profile and inventory preferences." /><div className="grid gap-4 lg:grid-cols-[220px_1fr]"><Card className="h-fit p-2">{["Business profile","Inventory rules","Tax & currency","Notifications","Team access"].map((x,i)=><button className={`w-full rounded-lg px-3 py-2.5 text-left text-sm font-medium ${i===0?"bg-emerald-50 text-emerald-700":"text-slate-600 hover:bg-slate-50"}`} key={x}>{x}</button>)}</Card><Card><div className="border-b border-slate-100 p-5"><h2 className="font-bold text-slate-900">Business profile</h2><p className="text-xs text-slate-500">Used across invoices, reports and purchase records.</p></div><div className="grid gap-4 p-5 sm:grid-cols-2"><label className="text-xs font-semibold text-slate-600">Business name<Input className="mt-1.5" defaultValue="Verma Mini Mart" /></label><label className="text-xs font-semibold text-slate-600">GSTIN<Input className="mt-1.5" defaultValue="23AAGFV1824Q1ZP" /></label><label className="text-xs font-semibold text-slate-600">Phone<Input className="mt-1.5" defaultValue="+91 98260 18420" /></label><label className="text-xs font-semibold text-slate-600">Email<Input className="mt-1.5" defaultValue="amit@vermaminimart.in" /></label><label className="text-xs font-semibold text-slate-600 sm:col-span-2">Address<Input className="mt-1.5" defaultValue="42, Scheme No. 54, Vijay Nagar, Indore, Madhya Pradesh" /></label></div><div className="flex justify-end border-t border-slate-100 p-4"><Button>Save changes</Button></div></Card></div></>; }
+function Settings({ user, onShopUpdated }: { user?: User | null; onShopUpdated?: (user: User) => void }) {
+  const [activeTab, setActiveTab] = useState("Business profile");
+  const [form, setForm] = useState({
+    name: user?.shopName || "",
+    gstin: "",
+    phone: user?.phone || "",
+    email: user?.email || "",
+    address: "",
+    currency: "INR",
+  });
+  const [loading, setLoading] = useState(false);
+  const [fetching, setFetching] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+
+  const [teamUsers, setTeamUsers] = useState<User[]>([]);
+  const [loadingTeam, setLoadingTeam] = useState(false);
+  const [showAddUser, setShowAddUser] = useState(false);
+  const [newUserForm, setNewUserForm] = useState<{
+    name: string;
+    email: string;
+    phone: string;
+    password: string;
+    role: "OWNER" | "MANAGER" | "SALESMAN" | "CASHIER";
+  }>({
+    name: "",
+    email: "",
+    phone: "",
+    password: "",
+    role: "SALESMAN",
+  });
+  const [createLoading, setCreateLoading] = useState(false);
+  const [teamError, setTeamError] = useState("");
+  const [teamMessage, setTeamMessage] = useState("");
+
+  useEffect(() => {
+    if (user?.shopId) {
+      setFetching(true);
+      fetchCurrentShop()
+        .then((shop) => {
+          setForm({
+            name: shop.name || "",
+            gstin: shop.gstin || "",
+            phone: shop.phone || user?.phone || "",
+            email: shop.email || user?.email || "",
+            address: shop.address || "",
+            currency: shop.currency || "INR",
+          });
+        })
+        .catch(() => {})
+        .finally(() => setFetching(false));
+    }
+  }, [user?.shopId]);
+
+  useEffect(() => {
+    if (activeTab === "Team access" && user?.shopId) {
+      setLoadingTeam(true);
+      fetchTeamUsers()
+        .then(setTeamUsers)
+        .catch((err: unknown) => {
+          if (err instanceof Error) {
+            setTeamError(err.message);
+          }
+        })
+        .finally(() => setLoadingTeam(false));
+    }
+  }, [activeTab, user?.shopId]);
+
+  const updateField = (field: keyof typeof form, val: string) => {
+    setForm((prev) => ({ ...prev, [field]: val }));
+    setMessage("");
+    setError("");
+  };
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!form.name.trim()) {
+      setError("Business name is required");
+      return;
+    }
+    setLoading(true);
+    setMessage("");
+    setError("");
+    try {
+      const res = user?.shopId
+        ? await updateShop({
+            name: form.name.trim(),
+            gstin: form.gstin.trim(),
+            phone: form.phone.trim(),
+            email: form.email.trim(),
+            address: form.address.trim(),
+            currency: form.currency,
+          })
+        : await createShop({
+            name: form.name.trim(),
+            gstin: form.gstin.trim(),
+            phone: form.phone.trim(),
+            email: form.email.trim(),
+            address: form.address.trim(),
+            currency: form.currency,
+          });
+
+      if (onShopUpdated) {
+        onShopUpdated(res.user);
+      }
+      setMessage("Shop details saved successfully.");
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError("Failed to update shop profile");
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCreateTeamUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newUserForm.name.trim() || !newUserForm.email.trim() || !newUserForm.phone.trim() || newUserForm.password.length < 6) {
+      setTeamError("Fill all fields and use a password with at least 6 characters.");
+      return;
+    }
+    setCreateLoading(true);
+    setTeamError("");
+    setTeamMessage("");
+    try {
+      const created = await createTeamUser({
+        name: newUserForm.name.trim(),
+        email: newUserForm.email.trim(),
+        phone: newUserForm.phone.trim(),
+        password: newUserForm.password,
+        role: newUserForm.role,
+      });
+      setTeamUsers((prev) => [...prev, created]);
+      setTeamMessage(`User ${created.fullName} created successfully with role ${created.role}.`);
+      setNewUserForm({ name: "", email: "", phone: "", password: "", role: "SALESMAN" });
+      setShowAddUser(false);
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        setTeamError(err.message);
+      } else {
+        setTeamError("Failed to create user.");
+      }
+    } finally {
+      setCreateLoading(false);
+    }
+  };
+
+  return (
+    <>
+      <PageHeader
+        title="Settings"
+        description="Manage your business profile and inventory preferences."
+      />
+      <div className="grid gap-4 lg:grid-cols-[220px_1fr]">
+        <Card className="h-fit p-2">
+          {["Business profile", "Inventory rules", "Tax & currency", "Notifications", "Team access"].map((tab) => (
+            <button
+              className={`w-full rounded-lg px-3 py-2.5 text-left text-sm font-medium transition ${
+                activeTab === tab ? "bg-emerald-50 text-emerald-700" : "text-slate-600 hover:bg-slate-50"
+              }`}
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              type="button"
+            >
+              {tab}
+            </button>
+          ))}
+        </Card>
+
+        {activeTab === "Business profile" && (
+          <Card>
+            <div className="border-b border-slate-100 p-5">
+              <h2 className="font-bold text-slate-900">Business profile</h2>
+              <p className="text-xs text-slate-500">
+                Synced with your active shop record. Used across invoices, reports, and purchase records.
+              </p>
+            </div>
+            {fetching ? (
+              <div className="p-8 text-center text-xs text-slate-400">Loading shop profile…</div>
+            ) : (
+              <form onSubmit={handleSave}>
+                <div className="grid gap-4 p-5 sm:grid-cols-2">
+                  <label className="text-xs font-semibold text-slate-600">
+                    Business name <span className="text-rose-500">*</span>
+                    <Input
+                      className="mt-1.5"
+                      value={form.name}
+                      onChange={(e) => updateField("name", e.target.value)}
+                      placeholder="Shop / Business name"
+                      required
+                    />
+                  </label>
+                  <label className="text-xs font-semibold text-slate-600">
+                    GSTIN
+                    <Input
+                      className="mt-1.5"
+                      value={form.gstin}
+                      onChange={(e) => updateField("gstin", e.target.value)}
+                      placeholder="23AABCU9603R1ZM"
+                    />
+                  </label>
+                  <label className="text-xs font-semibold text-slate-600">
+                    Phone
+                    <Input
+                      className="mt-1.5"
+                      value={form.phone}
+                      onChange={(e) => updateField("phone", e.target.value)}
+                      placeholder="+91 98765 43210"
+                    />
+                  </label>
+                  <label className="text-xs font-semibold text-slate-600">
+                    Email
+                    <Input
+                      className="mt-1.5"
+                      value={form.email}
+                      onChange={(e) => updateField("email", e.target.value)}
+                      placeholder="shop@business.com"
+                      type="email"
+                    />
+                  </label>
+                  <label className="text-xs font-semibold text-slate-600 sm:col-span-2">
+                    Address
+                    <Input
+                      className="mt-1.5"
+                      value={form.address}
+                      onChange={(e) => updateField("address", e.target.value)}
+                      placeholder="Store address, street, city, state"
+                    />
+                  </label>
+                  <label className="text-xs font-semibold text-slate-600">
+                    Currency
+                    <Select
+                      className="mt-1.5 w-full"
+                      value={form.currency}
+                      onChange={(e) => updateField("currency", e.target.value)}
+                    >
+                      <option value="INR">INR (₹) - Indian Rupee</option>
+                      <option value="USD">USD ($) - US Dollar</option>
+                      <option value="EUR">EUR (€) - Euro</option>
+                      <option value="GBP">GBP (£) - British Pound</option>
+                    </Select>
+                  </label>
+                </div>
+                {error && (
+                  <div className="mx-5 mb-4 flex items-start gap-2 rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs font-medium text-rose-700">
+                    <Icon className="shrink-0" name="warning" size={15} />
+                    {error}
+                  </div>
+                )}
+                {message && (
+                  <div className="mx-5 mb-4 flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs font-medium text-emerald-700">
+                    <Icon className="shrink-0" name="check" size={15} />
+                    {message}
+                  </div>
+                )}
+                <div className="flex justify-end border-t border-slate-100 p-4">
+                  <Button disabled={loading} type="submit">
+                    {loading ? "Saving changes…" : "Save changes"}
+                  </Button>
+                </div>
+              </form>
+            )}
+          </Card>
+        )}
+
+        {activeTab === "Team access" && (
+          <Card>
+            <div className="flex flex-col justify-between gap-3 border-b border-slate-100 p-5 sm:flex-row sm:items-center">
+              <div>
+                <h2 className="font-bold text-slate-900">Team access & roles</h2>
+                <p className="text-xs text-slate-500">
+                  Manage users who have access to this store.
+                </p>
+              </div>
+              {user?.shopId && (
+                <Button
+                  onClick={() => {
+                    setShowAddUser(!showAddUser);
+                    setTeamError("");
+                    setTeamMessage("");
+                  }}
+                  variant={showAddUser ? "secondary" : "primary"}
+                >
+                  <Icon name={showAddUser ? "close" : "plus"} size={16} />
+                  {showAddUser ? "Cancel" : "Add team member"}
+                </Button>
+              )}
+            </div>
+
+            {!user?.shopId ? (
+              <div className="p-8 text-center">
+                <div className="mx-auto grid size-10 place-items-center rounded-full bg-amber-50 text-amber-700">
+                  <Icon name="warning" size={20} />
+                </div>
+                <p className="mt-3 text-sm font-semibold text-slate-800">Shop setup required</p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Please complete your shop setup in the Overview tab first before adding team members.
+                </p>
+              </div>
+            ) : (
+              <div className="p-5">
+                {teamError && (
+                  <div className="mb-4 flex items-start gap-2 rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs font-medium text-rose-700">
+                    <Icon className="shrink-0" name="warning" size={15} />
+                    {teamError}
+                  </div>
+                )}
+                {teamMessage && (
+                  <div className="mb-4 flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs font-medium text-emerald-700">
+                    <Icon className="shrink-0" name="check" size={15} />
+                    {teamMessage}
+                  </div>
+                )}
+
+                {showAddUser && (
+                  <form onSubmit={handleCreateTeamUser} className="mb-6 rounded-xl border border-slate-200 bg-slate-50/70 p-5">
+                    <h3 className="text-sm font-bold text-slate-900">Create new user</h3>
+                    <p className="mt-0.5 text-xs text-slate-500">Add credentials and assign a role for the new user.</p>
+
+                    <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                      <label className="text-xs font-semibold text-slate-700">
+                        Full name <span className="text-rose-500">*</span>
+                        <Input
+                          className="mt-1.5"
+                          placeholder="User full name"
+                          value={newUserForm.name}
+                          onChange={(e) => setNewUserForm({ ...newUserForm, name: e.target.value })}
+                          required
+                        />
+                      </label>
+                      <label className="text-xs font-semibold text-slate-700">
+                        Work email <span className="text-rose-500">*</span>
+                        <Input
+                          className="mt-1.5"
+                          placeholder="user@business.com"
+                          type="email"
+                          value={newUserForm.email}
+                          onChange={(e) => setNewUserForm({ ...newUserForm, email: e.target.value })}
+                          required
+                        />
+                      </label>
+                      <label className="text-xs font-semibold text-slate-700">
+                        Mobile phone <span className="text-rose-500">*</span>
+                        <Input
+                          className="mt-1.5"
+                          placeholder="+91 98765 43210"
+                          value={newUserForm.phone}
+                          onChange={(e) => setNewUserForm({ ...newUserForm, phone: e.target.value })}
+                          required
+                        />
+                      </label>
+                      <label className="text-xs font-semibold text-slate-700">
+                        Password <span className="text-rose-500">*</span>
+                        <Input
+                          className="mt-1.5"
+                          placeholder="At least 6 characters"
+                          type="password"
+                          value={newUserForm.password}
+                          onChange={(e) => setNewUserForm({ ...newUserForm, password: e.target.value })}
+                          required
+                        />
+                      </label>
+                      <label className="text-xs font-semibold text-slate-700 sm:col-span-2">
+                        Store role <span className="text-rose-500">*</span>
+                        <Select
+                          className="mt-1.5 w-full"
+                          value={newUserForm.role}
+                          onChange={(e) => setNewUserForm({ ...newUserForm, role: e.target.value as any })}
+                        >
+                          <option value="SALESMAN">SALESMAN - Scan bills, create sales</option>
+                          <option value="CASHIER">CASHIER - Record billing and payments</option>
+                          <option value="MANAGER">MANAGER - Inventory management and purchase approval</option>
+                          <option value="OWNER">OWNER - Full shop control and settings</option>
+                        </Select>
+                      </label>
+                    </div>
+
+                    <div className="mt-5 flex justify-end gap-2">
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={() => {
+                          setShowAddUser(false);
+                          setTeamError("");
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                      <Button disabled={createLoading} type="submit">
+                        {createLoading ? "Creating user…" : "Save user"}
+                      </Button>
+                    </div>
+                  </form>
+                )}
+
+                {loadingTeam ? (
+                  <div className="py-8 text-center text-xs text-slate-400">Loading team members…</div>
+                ) : (
+                  <div className="divide-y divide-slate-100">
+                    {teamUsers.length === 0 ? (
+                      <div className="py-8 text-center text-xs text-slate-400">No team members registered yet.</div>
+                    ) : (
+                      teamUsers.map((member) => (
+                        <div key={member.id} className="flex flex-col justify-between gap-3 py-3.5 sm:flex-row sm:items-center">
+                          <div className="flex items-center gap-3">
+                            <span className="grid size-9 place-items-center rounded-full bg-slate-100 text-xs font-bold text-slate-700">
+                              {member.fullName.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase()}
+                            </span>
+                            <div>
+                              <p className="text-sm font-semibold text-slate-900">{member.fullName}</p>
+                              <p className="text-xs text-slate-500">{member.email} • {member.phone}</p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Badge
+                              tone={
+                                member.role === "OWNER"
+                                  ? "neutral"
+                                  : member.role === "MANAGER"
+                                  ? "info"
+                                  : member.role === "SALESMAN"
+                                  ? "success"
+                                  : "warning"
+                              }
+                            >
+                              {member.role}
+                            </Badge>
+                            <Badge tone="success">Active</Badge>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </Card>
+        )}
+
+        {activeTab !== "Business profile" && activeTab !== "Team access" && (
+          <Card className="p-8 text-center">
+            <h2 className="text-base font-bold text-slate-900">{activeTab}</h2>
+            <p className="mt-1 text-xs text-slate-500">Preferences for {activeTab.toLowerCase()} are managed under this workspace.</p>
+          </Card>
+        )}
+      </div>
+    </>
+  );
+}
 
 function AuthScreen({ onAuthenticated }: { onAuthenticated: (user: User) => void }) {
   const [mode, setMode] = useState<"signin" | "signup">("signin");
@@ -482,15 +1116,15 @@ export default function App() {
   }, []);
 
   const render = () => {
-    if (active === "Overview") return <Overview onNavigate={setActive} />;
+    if (active === "Overview") return <Overview onNavigate={setActive} user={currentUser} onShopCreated={(u) => setCurrentUser(u)} />;
     if (active === "Inventory") return <Inventory />;
     if (active === "Products") return <Inventory productsMode />;
     if (active === "Invoice Scanner") return <InvoiceScanner />;
     if (screenData[active]) return <DataScreen name={active} />;
     if (active === "AI Assistant") return <AIAssistant />;
     if (active === "Reports") return <Reports />;
-    if (active === "Settings") return <Settings />;
-    return <Overview onNavigate={setActive} />;
+    if (active === "Settings") return <Settings user={currentUser} onShopUpdated={(u) => setCurrentUser(u)} />;
+    return <Overview onNavigate={setActive} user={currentUser} onShopCreated={(u) => setCurrentUser(u)} />;
   };
 
   if (!authenticated) return <AuthScreen onAuthenticated={(user) => { setCurrentUser(user); setAuthenticated(true); }} />;

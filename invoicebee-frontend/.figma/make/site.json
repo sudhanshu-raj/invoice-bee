@@ -1,0 +1,10 @@
+{
+  "description": "Empowering Indian retailers, this AI-driven inventory management tool optimizes stock control, enhances purchasing decisions, and streamlines invoice processing.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

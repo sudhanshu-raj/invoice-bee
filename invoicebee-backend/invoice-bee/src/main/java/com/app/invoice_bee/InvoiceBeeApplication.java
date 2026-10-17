@@ -1,0 +1,24 @@
+package com.app.invoice_bee;
+
+import io.github.cdimascio.dotenv.Dotenv;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class InvoiceBeeApplication {
+
+	public static void main(String[] args) {
+		Dotenv dotenv = Dotenv.configure().ignoreIfMissing().load();
+		if (dotenv.get("DB_URL") == null) {
+			dotenv = Dotenv.configure().directory("../").ignoreIfMissing().load();
+		}
+		dotenv.entries().forEach(entry -> {
+			if (System.getProperty(entry.getKey()) == null) {
+				System.out.println(entry.getKey() + "=" + entry.getValue());
+				System.setProperty(entry.getKey(), entry.getValue());
+			}
+		});
+		SpringApplication.run(InvoiceBeeApplication.class, args);
+	}
+
+}

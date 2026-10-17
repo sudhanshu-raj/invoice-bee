@@ -1,0 +1,343 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="001-create-shops" author="invoicebee">
+        <createTable tableName="shops">
+            <column name="id" type="VARCHAR(36)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="name" type="VARCHAR(150)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="currency" type="CHAR(3)" defaultValue="INR">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="DATETIME(6)">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+    </changeSet>
+
+    <changeSet id="002-create-suppliers" author="invoicebee">
+        <createTable tableName="suppliers">
+            <column name="id" type="VARCHAR(36)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="shop_id" type="VARCHAR(36)">
+                <constraints nullable="false" foreignKeyName="fk_suppliers_shop" references="shops(id)"/>
+            </column>
+            <column name="name" type="VARCHAR(200)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="phone" type="VARCHAR(20)"/>
+            <column name="gstin" type="VARCHAR(15)"/>
+            <column name="created_at" type="DATETIME(6)">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <createIndex tableName="suppliers" indexName="idx_suppliers_shop_id">
+            <column name="shop_id"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="003-create-products" author="invoicebee">
+        <createTable tableName="products">
+            <column name="id" type="VARCHAR(36)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="shop_id" type="VARCHAR(36)">
+                <constraints nullable="false" foreignKeyName="fk_products_shop" references="shops(id)"/>
+            </column>
+            <column name="sku" type="VARCHAR(80)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="name" type="VARCHAR(200)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="brand" type="VARCHAR(100)"/>
+            <column name="model" type="VARCHAR(100)"/>
+            <column name="category" type="VARCHAR(100)"/>
+            <column name="unit" type="VARCHAR(20)" defaultValue="PIECE">
+                <constraints nullable="false"/>
+            </column>
+            <column name="mrp" type="NUMERIC(12, 2)"/>
+            <column name="selling_price" type="NUMERIC(12, 2)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="last_purchase_cost" type="NUMERIC(12, 2)"/>
+            <column name="qr_token" type="VARCHAR(36)">
+                <constraints nullable="false" unique="true" uniqueConstraintName="uq_products_qr_token"/>
+            </column>
+            <column name="active" type="BOOLEAN" defaultValueBoolean="true">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="DATETIME(6)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="DATETIME(6)">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <addUniqueConstraint tableName="products" columnNames="shop_id, sku" constraintName="uq_products_shop_sku"/>
+        <createIndex tableName="products" indexName="idx_products_shop_id">
+            <column name="shop_id"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="004-create-purchase-invoices" author="invoicebee">
+        <createTable tableName="purchase_invoices">
+            <column name="id" type="VARCHAR(36)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="shop_id" type="VARCHAR(36)">
+                <constraints nullable="false" foreignKeyName="fk_purchase_invoices_shop" references="shops(id)"/>
+            </column>
+            <column name="supplier_id" type="VARCHAR(36)">
+                <constraints foreignKeyName="fk_purchase_invoices_supplier" references="suppliers(id)"/>
+            </column>
+            <column name="invoice_number" type="VARCHAR(100)"/>
+            <column name="invoice_date" type="DATE"/>
+            <column name="status" type="VARCHAR(20)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="source_file_url" type="TEXT"/>
+            <column name="subtotal" type="NUMERIC(14, 2)"/>
+            <column name="tax_amount" type="NUMERIC(14, 2)"/>
+            <column name="total_amount" type="NUMERIC(14, 2)"/>
+            <column name="created_at" type="DATETIME(6)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="posted_at" type="DATETIME(6)"/>
+        </createTable>
+        <addUniqueConstraint tableName="purchase_invoices" columnNames="shop_id, supplier_id, invoice_number" constraintName="uq_purchase_invoices_shop_supplier_invoice_num"/>
+        <createIndex tableName="purchase_invoices" indexName="idx_purchase_invoices_shop_id">
+            <column name="shop_id"/>
+        </createIndex>
+        <createIndex tableName="purchase_invoices" indexName="idx_purchase_invoices_supplier_id">
+            <column name="supplier_id"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="005-create-purchase-invoice-items" author="invoicebee">
+        <createTable tableName="purchase_invoice_items">
+            <column name="id" type="VARCHAR(36)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="shop_id" type="VARCHAR(36)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="invoice_id" type="VARCHAR(36)">
+                <constraints nullable="false" foreignKeyName="fk_purchase_invoice_items_invoice" references="purchase_invoices(id)"/>
+            </column>
+            <column name="product_id" type="VARCHAR(36)">
+                <constraints foreignKeyName="fk_purchase_invoice_items_product" references="products(id)"/>
+            </column>
+            <column name="description" type="VARCHAR(300)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="quantity" type="NUMERIC(12, 3)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="unit_cost" type="NUMERIC(12, 2)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="discount_amount" type="NUMERIC(12, 2)" defaultValueNumeric="0.00">
+                <constraints nullable="false"/>
+            </column>
+            <column name="tax_rate" type="NUMERIC(5, 2)"/>
+            <column name="tax_amount" type="NUMERIC(12, 2)"/>
+            <column name="line_total" type="NUMERIC(14, 2)"/>
+            <column name="match_confidence" type="NUMERIC(5, 4)"/>
+            <column name="created_at" type="DATETIME(6)">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <createIndex tableName="purchase_invoice_items" indexName="idx_purchase_invoice_items_invoice_id">
+            <column name="invoice_id"/>
+        </createIndex>
+        <createIndex tableName="purchase_invoice_items" indexName="idx_purchase_invoice_items_product_id">
+            <column name="product_id"/>
+        </createIndex>
+        <createIndex tableName="purchase_invoice_items" indexName="idx_purchase_invoice_items_shop_id">
+            <column name="shop_id"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="006-create-inventory" author="invoicebee">
+        <createTable tableName="inventory">
+            <column name="product_id" type="VARCHAR(36)">
+                <constraints primaryKey="true" nullable="false" foreignKeyName="fk_inventory_product" references="products(id)"/>
+            </column>
+            <column name="quantity_on_hand" type="NUMERIC(12, 3)" defaultValueNumeric="0.000">
+                <constraints nullable="false"/>
+            </column>
+            <column name="average_unit_cost" type="NUMERIC(12, 4)" defaultValueNumeric="0.0000">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="DATETIME(6)">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+    </changeSet>
+
+    <changeSet id="007-create-stock-movements" author="invoicebee">
+        <createTable tableName="stock_movements">
+            <column name="id" type="VARCHAR(36)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="shop_id" type="VARCHAR(36)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="product_id" type="VARCHAR(36)">
+                <constraints nullable="false" foreignKeyName="fk_stock_movements_product" references="products(id)"/>
+            </column>
+            <column name="invoice_id" type="VARCHAR(36)">
+                <constraints foreignKeyName="fk_stock_movements_invoice" references="purchase_invoices(id)"/>
+            </column>
+            <column name="movement_type" type="VARCHAR(30)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="quantity_delta" type="NUMERIC(12, 3)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="unit_cost" type="NUMERIC(12, 4)"/>
+            <column name="note" type="TEXT"/>
+            <column name="created_at" type="DATETIME(6)">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <createIndex tableName="stock_movements" indexName="idx_stock_movements_product_id">
+            <column name="product_id"/>
+        </createIndex>
+        <createIndex tableName="stock_movements" indexName="idx_stock_movements_invoice_id">
+            <column name="invoice_id"/>
+        </createIndex>
+        <createIndex tableName="stock_movements" indexName="idx_stock_movements_shop_id">
+            <column name="shop_id"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="008-create-product-price-history" author="invoicebee">
+        <createTable tableName="product_price_history">
+            <column name="id" type="VARCHAR(36)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="shop_id" type="VARCHAR(36)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="product_id" type="VARCHAR(36)">
+                <constraints nullable="false" foreignKeyName="fk_price_history_product" references="products(id)"/>
+            </column>
+            <column name="old_price" type="NUMERIC(12, 2)"/>
+            <column name="new_price" type="NUMERIC(12, 2)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="changed_at" type="DATETIME(6)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="reason" type="VARCHAR(200)"/>
+        </createTable>
+        <createIndex tableName="product_price_history" indexName="idx_price_history_product_id">
+            <column name="product_id"/>
+        </createIndex>
+        <createIndex tableName="product_price_history" indexName="idx_price_history_shop_id">
+            <column name="shop_id"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="009-create-product-cost-history" author="invoicebee">
+        <createTable tableName="product_cost_history">
+            <column name="id" type="VARCHAR(36)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="shop_id" type="VARCHAR(36)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="product_id" type="VARCHAR(36)">
+                <constraints nullable="false" foreignKeyName="fk_cost_history_product" references="products(id)"/>
+            </column>
+            <column name="invoice_item_id" type="VARCHAR(36)">
+                <constraints nullable="false" foreignKeyName="fk_cost_history_invoice_item" references="purchase_invoice_items(id)"/>
+            </column>
+            <column name="unit_cost" type="NUMERIC(12, 4)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="recorded_at" type="DATETIME(6)">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <createIndex tableName="product_cost_history" indexName="idx_cost_history_product_id">
+            <column name="product_id"/>
+        </createIndex>
+        <createIndex tableName="product_cost_history" indexName="idx_cost_history_invoice_item_id">
+            <column name="invoice_item_id"/>
+        </createIndex>
+        <createIndex tableName="product_cost_history" indexName="idx_cost_history_shop_id">
+            <column name="shop_id"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="010-create-product-identifiers" author="invoicebee">
+        <createTable tableName="product_identifiers">
+            <column name="id" type="VARCHAR(36)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="shop_id" type="VARCHAR(36)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="product_id" type="VARCHAR(36)">
+                <constraints nullable="false" foreignKeyName="fk_identifiers_product" references="products(id)"/>
+            </column>
+            <column name="identifier_type" type="VARCHAR(20)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="identifier_value" type="VARCHAR(150)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="DATETIME(6)">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <createIndex tableName="product_identifiers" indexName="idx_identifiers_product_id">
+            <column name="product_id"/>
+        </createIndex>
+        <createIndex tableName="product_identifiers" indexName="idx_identifiers_shop_id">
+            <column name="shop_id"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="011-create-product-pitches" author="invoicebee">
+        <createTable tableName="product_pitches">
+            <column name="id" type="VARCHAR(36)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="shop_id" type="VARCHAR(36)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="product_id" type="VARCHAR(36)">
+                <constraints nullable="false" foreignKeyName="fk_pitches_product" references="products(id)"/>
+            </column>
+            <column name="language" type="VARCHAR(10)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="pitch_text" type="TEXT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="model_name" type="VARCHAR(100)"/>
+            <column name="created_at" type="DATETIME(6)">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <createIndex tableName="product_pitches" indexName="idx_pitches_product_id">
+            <column name="product_id"/>
+        </createIndex>
+        <createIndex tableName="product_pitches" indexName="idx_pitches_shop_id">
+            <column name="shop_id"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="015-create-product-prices" author="invoicebee">
+        <createTable tableName="product_prices">
+            <column name="id" type="VARCHAR(36)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="shop_id" type="VARCHAR(36)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="product_id" type="VARCHAR(36)">
+                <constraints nullable="false" unique="true" uniqueConstraintName="uq_product_prices_product" foreignKeyName="fk_product_prices_product" references="products(id)"/>
+            </column>
+            <column name="buying_price" type="NUMERIC(12, 2)" defaultValueNumeric="0.00">
+                <constraints nullable="false"/>
+            </column>
+            <column name="selling_price" type="NUMERIC(12, 2)" defaultValueNumeric="0.00">
+                <constraints nullable="false"/>
+            </column>
+            <column name="mrp" type="NUMERIC(12, 2)"/>
+            <column name="discount_price" type="NUMERIC(12, 2)"/>
+            <column name="created_at" type="DATETIME(6)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="DATETIME(6)">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <createIndex tableName="product_prices" indexName="idx_product_prices_product_id">
+            <column name="product_id"/>
+        </createIndex>
+        <createIndex tableName="product_prices" indexName="idx_product_prices_shop_id">
+            <column name="shop_id"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

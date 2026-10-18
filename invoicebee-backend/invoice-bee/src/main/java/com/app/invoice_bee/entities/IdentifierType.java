@@ -5,5 +5,6 @@ public enum IdentifierType {
     EAN,
     UPC,
     SKU,
+    HSN,
     OTHER
 }

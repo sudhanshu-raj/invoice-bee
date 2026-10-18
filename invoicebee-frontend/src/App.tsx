@@ -1,5 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { User, getToken, getStoredUser, signup, signin, fetchCurrentUser, logout, createShop, updateShop, fetchCurrentShop, createTeamUser, fetchTeamUsers } from "./services/auth";
+import { scanInvoiceFile, savePurchaseInvoice, ProductMatchDto, SavePurchaseInvoicePayload, PurchaseInvoiceDto, fetchPurchaseInvoices } from "./services/invoice";
+import { ProductDetail, fetchShopProducts, createProduct } from "./services/product";
+import { SupplierSummary, fetchSuppliers, createSupplier } from "./services/supplier";
+import { enrichProductWeb, ProductWebIntelligence } from "./services/intelligence";
+import { QrCodeModal } from "./components/QrCodeModal";
+import { QrScannerModal } from "./components/QrScannerModal";
+import { ProductPriceModal } from "./components/ProductPriceModal";
 
 type IconName =
   | "grid" | "box" | "tag" | "scan" | "cart" | "sale" | "users" | "spark"
@@ -75,10 +82,14 @@ function PageHeader({ title, description, actions }: { title: string; descriptio
 }
 
 const nav = [
-  ["Overview", "grid"], ["Inventory", "box"], ["Products", "tag"], ["Invoice Scanner", "scan"],
-  ["Purchases", "cart"], ["Sales", "sale"], ["Suppliers", "users"], ["Purchase Intelligence", "spark"],
-  ["Dead Stock", "archive"], ["Replenishment Planner", "refresh"], ["AI Assistant", "chat"],
-  ["Reports", "report"], ["Settings", "settings"],
+  ["Overview", "grid"],
+  ["Products", "tag"],
+  ["Invoice Scanner", "scan"],
+  ["Purchases", "cart"],
+  ["Suppliers", "users"],
+  ["AI Assistant", "chat"],
+  ["Reports", "report"],
+  ["Settings", "settings"],
 ] as [string, IconName][];
 
 const products = [
@@ -120,12 +131,16 @@ function Sidebar({ active, onNavigate, open, onClose, onLogout, user }: { active
   </aside>;
 }
 
-function Header({ onMenu, onNavigate, sidebarOpen }: { onMenu: () => void; onNavigate: (n: string) => void; sidebarOpen?: boolean }) {
+function Header({ onMenu, onNavigate, sidebarOpen, onScanQr }: { onMenu: () => void; onNavigate: (n: string) => void; sidebarOpen?: boolean; onScanQr?: () => void }) {
   return <header className="sticky top-0 z-30 flex h-16 items-center border-b border-slate-200 bg-white/95 px-4 backdrop-blur sm:px-6">
     <Button className="mr-2" variant="ghost" onClick={onMenu} title={sidebarOpen ? "Hide menu" : "Show menu"}><Icon name="menu" /></Button>
     <div className="relative hidden w-full max-w-md md:block"><Icon className="absolute left-3 top-2.5 text-slate-400" name="search" size={17} /><Input className="bg-slate-50 pl-9" placeholder="Search products, suppliers, invoices…" /></div>
     <div className="ml-auto flex items-center gap-2">
-      <Button variant="secondary" onClick={() => onNavigate("Invoice Scanner")}><Icon name="scan" size={16} /><span className="hidden sm:inline">Scan invoice</span></Button>
+      <Button variant="secondary" onClick={onScanQr} title="Scan QR to lookup product pricing">
+        <Icon name="scan" size={16} />
+        <span className="hidden sm:inline">Scan QR (Prices)</span>
+      </Button>
+      <Button variant="secondary" onClick={() => onNavigate("Invoice Scanner")}><Icon name="upload" size={16} /><span className="hidden sm:inline">Scan invoice</span></Button>
       <button className="relative grid size-9 place-items-center rounded-lg text-slate-500 hover:bg-slate-100"><Icon name="bell" /><span className="absolute right-2 top-2 size-1.5 rounded-full bg-rose-500 ring-2 ring-white" /></button>
     </div>
   </header>;
@@ -308,7 +323,7 @@ function ShopSetupView({ user, onShopCreated }: { user?: User | null; onShopCrea
   );
 }
 
-function Overview({ onNavigate, user, onShopCreated }: { onNavigate: (n: string) => void; user?: User | null; onShopCreated: (user: User) => void }) {
+function Overview({ onNavigate, user, onShopCreated, onShowQr }: { onNavigate: (n: string) => void; user?: User | null; onShopCreated: (user: User) => void; onShowQr?: (p: any) => void }) {
   if (!user?.shopId) {
     return <ShopSetupView user={user} onShopCreated={onShopCreated} />;
   }
@@ -333,39 +348,206 @@ function Overview({ onNavigate, user, onShopCreated }: { onNavigate: (n: string)
       <Card>
         <div className="flex items-center justify-between border-b border-slate-100 p-5"><div><h2 className="font-bold text-slate-900">Needs attention</h2><p className="mt-0.5 text-xs text-slate-500">Prioritized by business impact</p></div><Badge tone="warning">6 actions</Badge></div>
         <div className="divide-y divide-slate-100">
-          {[["warning", "6 items may stock out this week", "Potential lost sales of ₹18,400", "Replenishment Planner", "amber"], ["trend", "Supplier cost increased on 12 items", "Average increase of 8.2%", "Purchase Intelligence", "rose"], ["archive", "₹42,680 tied in dead stock", "14 items unsold for 90+ days", "Dead Stock", "blue"]].map(([icon, title, sub, target, tone]) => <button className="flex w-full gap-3 p-4 text-left hover:bg-slate-50" key={title} onClick={() => onNavigate(target)}><span className={`mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg ${tone === "amber" ? "bg-amber-50 text-amber-700" : tone === "rose" ? "bg-rose-50 text-rose-700" : "bg-blue-50 text-blue-700"}`}><Icon name={icon as IconName} size={16} /></span><span className="min-w-0 flex-1"><span className="block text-sm font-semibold text-slate-800">{title}</span><span className="mt-0.5 block text-xs text-slate-500">{sub}</span></span><Icon className="mt-2 text-slate-400" name="arrow" size={15} /></button>)}
+          {[
+            ["warning", "Review product pricing & margins", "Keep your retail prices and margins up to date", "Products", "amber"],
+            ["cart", "Recent purchase invoices & suppliers", "Track bills and supplier invoice payment statuses", "Purchases", "blue"],
+            ["users", "Active supplier directory", "View spend history and supplier contacts", "Suppliers", "rose"]
+          ].map(([icon, title, sub, target, tone]) => <button className="flex w-full gap-3 p-4 text-left hover:bg-slate-50" key={title} onClick={() => onNavigate(target)}><span className={`mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg ${tone === "amber" ? "bg-amber-50 text-amber-700" : tone === "rose" ? "bg-rose-50 text-rose-700" : "bg-blue-50 text-blue-700"}`}><Icon name={icon as IconName} size={16} /></span><span className="min-w-0 flex-1"><span className="block text-sm font-semibold text-slate-800">{title}</span><span className="mt-0.5 block text-xs text-slate-500">{sub}</span></span><Icon className="mt-2 text-slate-400" name="arrow" size={15} /></button>)}
         </div>
       </Card>
     </div>
     <div className="mt-4 grid gap-4 lg:grid-cols-3">
-      <Card className="lg:col-span-2"><div className="flex items-center justify-between border-b border-slate-100 p-5"><h2 className="font-bold text-slate-900">Top products by value</h2><Button variant="ghost" onClick={() => onNavigate("Inventory")}>View inventory <Icon name="arrow" size={15} /></Button></div><ProductTable compact onProduct={() => onNavigate("Inventory")} /></Card>
-      <Card className="p-5"><h2 className="font-bold text-slate-900">Purchase spend</h2><p className="text-xs text-slate-500">March 2025</p><div className="mt-5 flex items-center gap-5"><div className="grid size-28 place-items-center rounded-full bg-[conic-gradient(#059669_0_42%,#0f766e_42%_70%,#f59e0b_70%_87%,#e2e8f0_87%)]"><div className="grid size-16 place-items-center rounded-full bg-white text-center"><span className="text-xs text-slate-500">Total</span><strong className="-mt-3 text-sm text-slate-900">₹3.2L</strong></div></div><div className="space-y-2 text-xs">{[["Grocery","42%","bg-emerald-600"],["Home care","28%","bg-teal-700"],["Personal care","17%","bg-amber-500"],["Other","13%","bg-slate-200"]].map(x=><div className="flex items-center gap-2" key={x[0]}><span className={`size-2 rounded-full ${x[2]}`} /><span className="w-20 text-slate-500">{x[0]}</span><strong>{x[1]}</strong></div>)}</div></div></Card>
+      <Card className="lg:col-span-2"><div className="flex items-center justify-between border-b border-slate-100 p-5"><h2 className="font-bold text-slate-900">Top products by value</h2><Button variant="ghost" onClick={() => onNavigate("Products")}>View products <Icon name="arrow" size={15} /></Button></div><ProductTable compact onProduct={() => onNavigate("Products")} onShowQr={onShowQr} /></Card>
+      <Card className="p-5"><h2 className="font-bold text-slate-900">Purchase spend</h2><p className="text-xs text-slate-500">Overview</p><div className="mt-5 flex items-center gap-5"><div className="grid size-28 place-items-center rounded-full bg-[conic-gradient(#059669_0_42%,#0f766e_42%_70%,#f59e0b_70%_87%,#e2e8f0_87%)]"><div className="grid size-16 place-items-center rounded-full bg-white text-center"><span className="text-xs text-slate-500">Total</span><strong className="-mt-3 text-sm text-slate-900">₹3.2L</strong></div></div><div className="space-y-2 text-xs">{[["Grocery","42%","bg-emerald-600"],["Home care","28%","bg-teal-700"],["Personal care","17%","bg-amber-500"],["Other","13%","bg-slate-200"]].map(x=><div className="flex items-center gap-2" key={x[0]}><span className={`size-2 rounded-full ${x[2]}`} /><span className="w-20 text-slate-500">{x[0]}</span><strong>{x[1]}</strong></div>)}</div></div></Card>
     </div>
   </>;
 }
 
-function ProductTable({ compact = false, onProduct }: { compact?: boolean; onProduct: (p: typeof products[0]) => void }) {
-  const rows = compact ? products.slice(0, 4) : products;
-  return <div className="overflow-x-auto"><table className="w-full min-w-[760px] text-left"><thead><tr className="border-b border-slate-100 bg-slate-50/70 text-[11px] uppercase tracking-wide text-slate-500"><th className="px-5 py-3 font-semibold">Product</th><th className="px-4 py-3 font-semibold">Stock</th><th className="px-4 py-3 font-semibold">Cost</th><th className="px-4 py-3 font-semibold">Selling price</th><th className="px-4 py-3 font-semibold">Margin</th><th className="px-4 py-3 font-semibold">Status</th></tr></thead><tbody className="divide-y divide-slate-100">{rows.map(p => <tr className="cursor-pointer text-sm hover:bg-slate-50" key={p.sku} onClick={() => onProduct(p)}><td className="px-5 py-3"><div className="font-semibold text-slate-800">{p.name}</div><div className="text-xs text-slate-400">{p.sku} · {p.category}</div></td><td className="px-4 py-3 font-medium">{p.stock}</td><td className="px-4 py-3">{currency(p.cost)}</td><td className="px-4 py-3">{currency(p.price)}</td><td className="px-4 py-3 font-medium text-emerald-700">{p.margin}%</td><td className="px-4 py-3"><Badge tone={p.status === "In stock" ? "success" : p.status === "Low stock" ? "warning" : "danger"}>{p.status}</Badge></td></tr>)}</tbody></table></div>;
+function ProductTable({ compact = false, productsList, onProduct, onShowQr }: { compact?: boolean; productsList?: ProductDetail[]; onProduct: (p: ProductDetail) => void; onShowQr?: (p: any) => void }) {
+  const [liveProducts, setLiveProducts] = useState<ProductDetail[]>([]);
+
+  useEffect(() => {
+    if (!productsList) {
+      fetchShopProducts().then(setLiveProducts).catch(() => {});
+    }
+  }, [productsList]);
+
+  const items = productsList || liveProducts;
+  const rows = compact ? items.slice(0, 4) : items;
+
+  if (rows.length === 0) {
+    return <div className="p-8 text-center text-sm text-slate-500">No products registered yet. Click &quot;Add product&quot; or scan an invoice to populate.</div>;
+  }
+
+  return <div className="overflow-x-auto"><table className="w-full min-w-[760px] text-left"><thead><tr className="border-b border-slate-100 bg-slate-50/70 text-[11px] uppercase tracking-wide text-slate-500"><th className="px-5 py-3 font-semibold">Product</th><th className="px-4 py-3 font-semibold">Stock</th><th className="px-4 py-3 font-semibold">Cost</th><th className="px-4 py-3 font-semibold">Selling price</th><th className="px-4 py-3 font-semibold">Margin</th><th className="px-4 py-3 font-semibold">Status</th><th className="px-4 py-3 font-semibold text-center">QR Code</th></tr></thead><tbody className="divide-y divide-slate-100">{rows.map(p => {
+    const cost = Number(p.buyingPrice ?? p.lastPurchaseCost ?? 0);
+    const price = Number(p.sellingPrice ?? 0);
+    const margin = price > 0 ? Math.round(((price - cost) / price) * 100 * 10) / 10 : 0;
+    const stock = Number(p.stock ?? 0);
+    const status = stock === 0 ? "Out of stock" : stock < 10 ? "Low stock" : "In stock";
+    return <tr className="cursor-pointer text-sm hover:bg-slate-50" key={p.id || p.sku} onClick={() => onProduct(p)}><td className="px-5 py-3"><div className="font-semibold text-slate-800">{p.name}</div><div className="text-xs text-slate-400">{p.sku} {p.category ? `· ${p.category}` : ""}</div></td><td className="px-4 py-3 font-medium">{stock} {p.unit || ""}</td><td className="px-4 py-3">{currency(cost)}</td><td className="px-4 py-3 font-semibold text-emerald-800">{currency(price)}</td><td className="px-4 py-3 font-medium text-emerald-700">{margin}%</td><td className="px-4 py-3"><Badge tone={status === "In stock" ? "success" : status === "Low stock" ? "warning" : "danger"}>{status}</Badge></td><td className="px-4 py-3 text-center" onClick={e => e.stopPropagation()}><button type="button" className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm" onClick={() => onShowQr && onShowQr(p)}><Icon name="scan" size={13} /><span>QR</span></button></td></tr>;
+  })}</tbody></table></div>;
 }
 
-function ProductDialog({ product, onClose }: { product: typeof products[0]; onClose: () => void }) {
-  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm" onMouseDown={onClose}><Card className="w-full max-w-2xl shadow-2xl" ><div onMouseDown={e => e.stopPropagation()}><div className="flex items-start justify-between border-b border-slate-100 p-5"><div><Badge tone={product.status === "In stock" ? "success" : "warning"}>{product.status}</Badge><h2 className="mt-2 text-xl font-bold text-slate-900">{product.name}</h2><p className="text-sm text-slate-500">{product.sku} · Barcode 8901725 100248</p></div><Button variant="ghost" onClick={onClose}><Icon name="close" /></Button></div><div className="grid gap-4 p-5 sm:grid-cols-2"><label className="text-xs font-semibold text-slate-600">Product name<Input className="mt-1.5" defaultValue={product.name} /></label><label className="text-xs font-semibold text-slate-600">Category<Select className="mt-1.5 w-full" defaultValue={product.category}><option>{product.category}</option><option>Grocery</option><option>Home care</option></Select></label><label className="text-xs font-semibold text-slate-600">Cost price<Input className="mt-1.5" defaultValue={product.cost} type="number" /></label><label className="text-xs font-semibold text-slate-600">Selling price<Input className="mt-1.5" defaultValue={product.price} type="number" /></label><label className="text-xs font-semibold text-slate-600">Current stock<Input className="mt-1.5" defaultValue={product.stock} type="number" /></label><label className="text-xs font-semibold text-slate-600">Low-stock threshold<Input className="mt-1.5" defaultValue="15" type="number" /></label></div><div className="flex justify-end gap-2 border-t border-slate-100 p-4"><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={onClose}><Icon name="check" size={16} />Save changes</Button></div></div></Card></div>;
+function ProductDialog({ product, isNew = false, onClose, onShowQr, onSaved }: { product: Partial<ProductDetail>; isNew?: boolean; onClose: () => void; onShowQr?: (p: any) => void; onSaved?: () => void }) {
+  const [form, setForm] = useState({
+    name: product.name || "",
+    sku: product.sku || "",
+    category: product.category || "Grocery",
+    brand: product.brand || "",
+    unit: product.unit || "PIECE",
+    buyingPrice: product.buyingPrice ?? product.lastPurchaseCost ?? 0,
+    sellingPrice: product.sellingPrice ?? 0,
+    mrp: product.mrp ?? 0,
+    discountPrice: product.discountPrice ?? 0,
+    stock: product.stock ?? 0,
+    hsnSac: product.hsnSac || "",
+    pitchHook: product.pitchHook || "",
+  });
+  const [submitting, setSubmitting] = useState(false);
+  const [enriching, setEnriching] = useState(false);
+  const [webIntelligence, setWebIntelligence] = useState<ProductWebIntelligence | null>(null);
+  const [err, setErr] = useState("");
+
+  const handleEnrich = async () => {
+    if (!form.name.trim()) {
+      setErr("Enter a product name to search the web for details");
+      return;
+    }
+    setEnriching(true);
+    setErr("");
+    try {
+      const data = await enrichProductWeb(form.name.trim());
+      setWebIntelligence(data);
+      setForm(prev => ({
+        ...prev,
+        name: data.suggestedName || prev.name,
+        brand: data.brand || prev.brand,
+        category: data.category || prev.category,
+        mrp: data.estimatedMrp ? Number(data.estimatedMrp) : prev.mrp,
+        hsnSac: data.hsnCode || prev.hsnSac,
+        pitchHook: data.salesPitch || prev.pitchHook,
+      }));
+    } catch (e: any) {
+      setErr(e.message || "Failed to retrieve web intelligence");
+    } finally {
+      setEnriching(false);
+    }
+  };
+
+  const handleSave = async () => {
+    if (!form.name.trim()) {
+      setErr("Product name is required");
+      return;
+    }
+    setSubmitting(true);
+    setErr("");
+    try {
+      await createProduct(form);
+      if (onSaved) onSaved();
+      onClose();
+    } catch (e: any) {
+      setErr(e.message || "Failed to save product");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm" onMouseDown={onClose}><Card className="w-full max-w-2xl shadow-2xl"><div onMouseDown={e => e.stopPropagation()}><div className="flex items-start justify-between border-b border-slate-100 p-5"><div><h2 className="text-xl font-bold text-slate-900">{isNew ? "Add New Product" : form.name}</h2><p className="text-sm text-slate-500">{form.sku ? `SKU: ${form.sku}` : "Provide details or fetch live intelligence from the web"}</p></div><Button variant="ghost" onClick={onClose}><Icon name="close" /></Button></div>
+    {err && <div className="m-4 rounded-lg bg-rose-50 p-3 text-sm text-rose-700">{err}</div>}
+    
+    <div className="max-h-[65vh] overflow-y-auto p-5">
+      <div className="mb-4 flex items-center justify-between rounded-xl border border-emerald-100 bg-emerald-50/60 p-3">
+        <div className="flex items-center gap-2.5">
+          <span className="grid size-8 place-items-center rounded-lg bg-emerald-600 text-white"><Icon name="spark" size={16} /></span>
+          <div>
+            <div className="text-xs font-bold text-emerald-950">SearXNG Product Intelligence</div>
+            <div className="text-[11px] text-emerald-700">Search the web for MRP, HSN, brand, and counter sales hooks</div>
+          </div>
+        </div>
+        <Button disabled={enriching || !form.name.trim()} onClick={handleEnrich} type="button" variant="secondary" className="border-emerald-300 text-emerald-800 hover:bg-emerald-100">
+          <Icon name="search" size={14} />
+          {enriching ? "Searching..." : "Auto-fill from Web"}
+        </Button>
+      </div>
+
+      {webIntelligence && webIntelligence.sources.length > 0 && (
+        <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-400">Web Sources Found</div>
+          <div className="space-y-1">
+            {webIntelligence.sources.slice(0, 3).map((s, idx) => (
+              <a className="block truncate text-xs text-blue-600 hover:underline" href={s.url} key={idx} rel="noopener noreferrer" target="_blank">
+                • {s.title || s.url}
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <label className="text-xs font-semibold text-slate-600 sm:col-span-2">Product name *<Input className="mt-1.5" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="e.g. Fortune Sunflower Oil 1L" /></label>
+        <label className="text-xs font-semibold text-slate-600">SKU / Code<Input className="mt-1.5" value={form.sku} onChange={e => setForm({ ...form, sku: e.target.value })} placeholder="Leave blank to auto-generate" /></label>
+        <label className="text-xs font-semibold text-slate-600">Category<Select className="mt-1.5 w-full" value={form.category} onChange={e => setForm({ ...form, category: e.target.value })}><option>Grocery</option><option>Home care</option><option>Personal care</option><option>Snacks</option><option>Beverages</option><option>General</option></Select></label>
+        <label className="text-xs font-semibold text-slate-600">Brand<Input className="mt-1.5" value={form.brand} onChange={e => setForm({ ...form, brand: e.target.value })} placeholder="e.g. Fortune" /></label>
+        <label className="text-xs font-semibold text-slate-600">Unit<Select className="mt-1.5 w-full" value={form.unit} onChange={e => setForm({ ...form, unit: e.target.value })}><option value="PIECE">PIECE</option><option value="KG">KG</option><option value="LITRE">LITRE</option><option value="PACKET">PACKET</option><option value="BOX">BOX</option></Select></label>
+        <label className="text-xs font-semibold text-slate-600">Cost price (₹)<Input className="mt-1.5" type="number" step="0.01" value={form.buyingPrice} onChange={e => setForm({ ...form, buyingPrice: Number(e.target.value) })} /></label>
+        <label className="text-xs font-semibold text-slate-600">Selling price (₹) *<Input className="mt-1.5" type="number" step="0.01" value={form.sellingPrice} onChange={e => setForm({ ...form, sellingPrice: Number(e.target.value) })} /></label>
+        <label className="text-xs font-semibold text-slate-600">MRP (₹)<Input className="mt-1.5" type="number" step="0.01" value={form.mrp} onChange={e => setForm({ ...form, mrp: Number(e.target.value) })} /></label>
+        <label className="text-xs font-semibold text-slate-600">Discounted / Offer price (₹)<Input className="mt-1.5" type="number" step="0.01" value={form.discountPrice} onChange={e => setForm({ ...form, discountPrice: Number(e.target.value) })} /></label>
+        <label className="text-xs font-semibold text-slate-600">Current Stock Quantity<Input className="mt-1.5" type="number" value={form.stock} onChange={e => setForm({ ...form, stock: Number(e.target.value) })} /></label>
+        <label className="text-xs font-semibold text-slate-600">HSN / SAC<Input className="mt-1.5" value={form.hsnSac} onChange={e => setForm({ ...form, hsnSac: e.target.value })} placeholder="e.g. 1512" /></label>
+        <label className="text-xs font-semibold text-slate-600 sm:col-span-2">Sales Pitch Hook<Input className="mt-1.5" value={form.pitchHook} onChange={e => setForm({ ...form, pitchHook: e.target.value })} placeholder="Customer counter recommendation hook" /></label>
+      </div>
+    </div>
+    <div className="flex items-center justify-between border-t border-slate-100 p-4">{!isNew && product.qrToken ? <Button variant="secondary" onClick={() => onShowQr && onShowQr(product)}><Icon name="scan" size={15} />View / Print QR Code</Button> : <div />}<div className="flex gap-2"><Button variant="secondary" onClick={onClose}>Cancel</Button><Button disabled={submitting} onClick={handleSave}><Icon name="check" size={16} />{submitting ? "Saving..." : "Save product"}</Button></div></div></div></Card></div>;
 }
 
-function Inventory({ productsMode = false }: { productsMode?: boolean }) {
+function ProductsScreen({ onShowQr, onScanQr }: { onShowQr?: (p: any) => void; onScanQr?: () => void }) {
+  const [productsList, setProductsList] = useState<ProductDetail[]>([]);
+  const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("All status");
-  const [selected, setSelected] = useState<typeof products[0] | null>(null);
+  const [selected, setSelected] = useState<ProductDetail | null>(null);
+  const [isNewProduct, setIsNewProduct] = useState(false);
   const [importing, setImporting] = useState(false);
-  const filtered = useMemo(() => products.filter(p => p.name.toLowerCase().includes(query.toLowerCase()) && (status === "All status" || p.status === status)), [query, status]);
+
+  const loadProducts = () => {
+    setLoading(true);
+    fetchShopProducts().then(res => {
+      setProductsList(res);
+      setLoading(false);
+    }).catch(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    loadProducts();
+  }, []);
+
+  const filtered = useMemo(() => {
+    return productsList.filter(p => {
+      const matchQuery = p.name.toLowerCase().includes(query.toLowerCase()) || (p.sku && p.sku.toLowerCase().includes(query.toLowerCase()));
+      const stock = Number(p.stock ?? 0);
+      const prodStatus = stock === 0 ? "Out of stock" : stock < 10 ? "Low stock" : "In stock";
+      const matchStatus = status === "All status" || prodStatus === status;
+      return matchQuery && matchStatus;
+    });
+  }, [productsList, query, status]);
+
+  const totalStockUnits = useMemo(() => productsList.reduce((acc, p) => acc + Number(p.stock ?? 0), 0), [productsList]);
+  const totalValuation = useMemo(() => productsList.reduce((acc, p) => acc + (Number(p.stock ?? 0) * Number(p.buyingPrice ?? p.lastPurchaseCost ?? 0)), 0), [productsList]);
+
   return <>
-    <PageHeader title={productsMode ? "Products" : "Inventory"} description={productsMode ? "Manage your product catalogue, pricing and barcodes." : "Track stock levels, valuation and product availability."} actions={<><Button variant="secondary" onClick={() => setImporting(true)}><Icon name="upload" size={16} />Import CSV / Excel</Button><Button onClick={() => setSelected({ name: "New product", sku: "AUTO", category: "Grocery", stock: 0, cost: 0, price: 0, margin: 0, status: "In stock" })}><Icon name="plus" size={16} />Add product</Button></>} />
-    <Card><div className="flex flex-col gap-3 border-b border-slate-100 p-4 sm:flex-row"><div className="relative flex-1"><Icon className="absolute left-3 top-2.5 text-slate-400" name="search" size={17} /><Input className="pl-9" placeholder="Search by product, SKU or barcode" value={query} onChange={e => setQuery(e.target.value)} /></div><Select value={status} onChange={e => setStatus(e.target.value)}><option>All status</option><option>In stock</option><option>Low stock</option><option>Out of stock</option></Select><Button variant="secondary"><Icon name="filter" size={16} />More filters</Button></div>
-      {filtered.length ? <ProductTable onProduct={setSelected} /> : <div className="grid place-items-center py-20 text-center"><span className="grid size-12 place-items-center rounded-full bg-slate-100 text-slate-400"><Icon name="search" /></span><h3 className="mt-3 font-bold text-slate-800">No products found</h3><p className="mt-1 text-sm text-slate-500">Try changing your search or filters.</p></div>}
-      <div className="flex items-center justify-between border-t border-slate-100 px-5 py-3 text-xs text-slate-500"><span>Showing {filtered.length} of 1,248 products</span><div className="flex gap-1"><Button variant="secondary" disabled>Previous</Button><Button variant="secondary">Next</Button></div></div>
+    <PageHeader title="Products" description="Manage your product catalogue, stock levels, pricing, and QR codes in one place." actions={<><Button variant="secondary" onClick={onScanQr}><Icon name="scan" size={16} />Scan QR (Prices)</Button><Button variant="secondary" onClick={() => setImporting(true)}><Icon name="upload" size={16} />Import CSV / Excel</Button><Button onClick={() => { setSelected({ name: "", sku: "", category: "Grocery", stock: 0, sellingPrice: 0, buyingPrice: 0 } as ProductDetail); setIsNewProduct(true); }}><Icon name="plus" size={16} />Add product</Button></>} />
+    <div className="grid gap-3 sm:grid-cols-3 mb-4">
+      <MetricCard title="Total Products" value={String(productsList.length)} meta="In active catalogue" icon="tag" tone="blue" />
+      <MetricCard title="Total Stock Units" value={String(totalStockUnits)} meta="Quantity on hand across all items" icon="box" tone="emerald" />
+      <MetricCard title="Inventory Valuation" value={currency(totalValuation)} meta="Calculated from buying cost" icon="report" />
+    </div>
+    <Card><div className="flex flex-col gap-3 border-b border-slate-100 p-4 sm:flex-row"><div className="relative flex-1"><Icon className="absolute left-3 top-2.5 text-slate-400" name="search" size={17} /><Input className="pl-9" placeholder="Search by product name, SKU or brand" value={query} onChange={e => setQuery(e.target.value)} /></div><Select value={status} onChange={e => setStatus(e.target.value)}><option>All status</option><option>In stock</option><option>Low stock</option><option>Out of stock</option></Select><Button variant="secondary" onClick={loadProducts}><Icon name="refresh" size={16} />Refresh</Button></div>
+      {loading ? <div className="p-16 text-center text-sm text-slate-500">Loading products from database...</div> : filtered.length ? <ProductTable productsList={filtered} onProduct={(p) => { setSelected(p); setIsNewProduct(false); }} onShowQr={onShowQr} /> : <div className="grid place-items-center py-20 text-center"><span className="grid size-12 place-items-center rounded-full bg-slate-100 text-slate-400"><Icon name="search" /></span><h3 className="mt-3 font-bold text-slate-800">No products found</h3><p className="mt-1 text-sm text-slate-500">Try changing your search or add a new product.</p></div>}
+      <div className="flex items-center justify-between border-t border-slate-100 px-5 py-3 text-xs text-slate-500"><span>Showing {filtered.length} of {productsList.length} products</span></div>
     </Card>
-    {selected && <ProductDialog product={selected} onClose={() => setSelected(null)} />}
+    {selected && <ProductDialog product={selected} isNew={isNewProduct} onClose={() => setSelected(null)} onShowQr={onShowQr} onSaved={loadProducts} />}
     {importing && <CsvImport onClose={() => setImporting(false)} />}
   </>;
 }
@@ -375,57 +557,1224 @@ function CsvImport({ onClose }: { onClose: () => void }) {
   return <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/40 p-4 backdrop-blur-sm"><Card className="w-full max-w-3xl shadow-2xl"><div className="flex items-center justify-between border-b border-slate-100 p-5"><div><h2 className="text-lg font-bold text-slate-900">Import products</h2><p className="text-sm text-slate-500">Upload and map a CSV or Excel file</p></div><Button variant="ghost" onClick={onClose}><Icon name="close" /></Button></div>{step === 1 ? <div className="p-6"><button className="grid w-full place-items-center rounded-xl border-2 border-dashed border-slate-200 bg-slate-50 py-14 hover:border-emerald-400 hover:bg-emerald-50/30" onClick={() => setStep(2)}><span className="grid size-12 place-items-center rounded-full bg-emerald-100 text-emerald-700"><Icon name="upload" /></span><strong className="mt-3 text-sm text-slate-800">Choose a file or drag it here</strong><span className="mt-1 text-xs text-slate-500">CSV, XLS or XLSX up to 10 MB</span></button></div> : <div className="p-6"><div className="mb-4 flex items-center gap-3 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-800"><Icon name="check" /><strong>products_march.xlsx</strong><span className="text-emerald-600">· 126 rows found</span></div><h3 className="font-bold text-slate-800">Map file columns</h3><div className="mt-3 grid grid-cols-2 gap-3">{[["Product Name","Name"],["Item Code","SKU"],["Purchase Rate","Cost price"],["MRP","Selling price"],["Closing Stock","Opening quantity"],["GST %","Tax rate"]].map(x => <div className="flex items-center gap-2 rounded-lg border border-slate-200 p-3" key={x[0]}><span className="flex-1 text-xs font-medium text-slate-500">{x[0]}</span><Icon name="arrow" size={14} /><Select defaultValue={x[1]}>{[x[1],"Ignore"].map(v=><option key={v}>{v}</option>)}</Select></div>)}</div></div>}<div className="flex justify-end gap-2 border-t border-slate-100 p-4"><Button variant="secondary" onClick={onClose}>Cancel</Button>{step === 2 && <Button onClick={onClose}>Import 126 products</Button>}</div></Card></div>;
 }
 
-type InvoiceItem = { name: string; qty: number; cost: number; match: string; confidence: number; included: boolean };
-const initialInvoice: InvoiceItem[] = [
-  { name: "AASHIRVAAD ATTA 5KG", qty: 12, cost: 236, match: "Aashirvaad Atta 5 kg", confidence: 98, included: true },
-  { name: "FORTUNE SUN OIL 1L", qty: 24, cost: 114.5, match: "Fortune Sunflower Oil 1L", confidence: 92, included: true },
-  { name: "GOOD DAY CASHEW 600G", qty: 18, cost: 89, match: "Britannia Good Day 600 g", confidence: 71, included: true },
-  { name: "CLEANMAX FLOOR 1L", qty: 6, cost: 128, match: "Create as new product", confidence: 54, included: true },
-];
+interface ReviewItem {
+  id: string;
+  name: string;
+  matchedProductId: string | null;
+  sku: string;
+  category: string;
+  unit: string;
+  quantity: number;
+  unitCost: number;
+  taxRate: number;
+  taxAmount: number;
+  invoiceDiscountPercentage: number;
+  invoiceDiscountAmount: number;
+  lineTotal: number;
+  confidence: number;
+  included: boolean;
+  sellingPrice: number;
+  discountPercentage: number | null;
+  mrp: number | null;
+  description: string;
+  hsnSac: string;
+  showPitchInput?: boolean;
+}
+
+function Step({ number, label, active, done }: { number: number; label: string; active: boolean; done: boolean }) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className={`grid size-8 place-items-center rounded-full text-xs font-bold ${active ? "bg-emerald-600 text-white" : "bg-slate-200 text-slate-500"}`}>
+        {done ? <Icon name="check" size={15} /> : number}
+      </span>
+      <span className={`text-sm font-semibold ${active ? "text-slate-800" : "text-slate-400"}`}>{label}</span>
+    </div>
+  );
+}
+
+function Line({ active }: { active: boolean }) {
+  return <div className={`mx-3 h-px max-w-24 flex-1 ${active ? "bg-emerald-600" : "bg-slate-200"}`} />;
+}
 
 function InvoiceScanner() {
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
-  const [items, setItems] = useState(initialInvoice);
-  const [success, setSuccess] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [successResult, setSuccessResult] = useState<PurchaseInvoiceDto | null>(null);
+
+  const [availableProducts, setAvailableProducts] = useState<ProductMatchDto[]>([]);
+  const [sourceFileUrl, setSourceFileUrl] = useState<string | null>(null);
+  const [filePreview, setFilePreview] = useState<string | null>(null);
+  const [fileName, setFileName] = useState<string>("Sample Invoice");
+  const [showPreviewModal, setShowPreviewModal] = useState(false);
+
+  const [supplierName, setSupplierName] = useState("Skynet Computer");
+  const [supplierGstin, setSupplierGstin] = useState("TOALQPTS655B123");
+  const [supplierPhone, setSupplierPhone] = useState("9135125553");
+  const [buyerName, setBuyerName] = useState("Apna Electronics");
+  const [buyerGstin, setBuyerGstin] = useState("108WXPS0381J3Z2");
+  const [invoiceNumber, setInvoiceNumber] = useState("AMZ26270106");
+  const [invoiceDate, setInvoiceDate] = useState("2026-06-04");
+  const [paymentMode, setPaymentMode] = useState("CREDIT");
+  const [subtotal, setSubtotal] = useState(134324.99);
+  const [taxAmount, setTaxAmount] = useState(20490.25);
+  const [grandTotal, setGrandTotal] = useState(134325.0);
+
+  const [items, setItems] = useState<ReviewItem[]>([]);
+
   const fileRef = useRef<HTMLInputElement>(null);
-  const extract = () => { setLoading(true); setTimeout(() => { setLoading(false); setStep(2); }, 900); };
-  const total = items.filter(x => x.included).reduce((sum, x) => sum + x.qty * x.cost, 0);
-  const update = (index: number, key: keyof InvoiceItem, value: string | number | boolean) => setItems(items.map((item, i) => i === index ? { ...item, [key]: value } : item));
-  if (success) return <><PageHeader title="Invoice Scanner" description="Turn supplier invoices into accurate stock updates." /><Card className="mx-auto max-w-xl p-10 text-center"><span className="mx-auto grid size-16 place-items-center rounded-full bg-emerald-100 text-emerald-700"><Icon name="check" size={30} /></span><h2 className="mt-5 text-2xl font-bold text-slate-900">Import completed</h2><p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500">60 units across 4 products were added to inventory. Purchase invoice SRS-1824 has been saved locally in this prototype.</p><div className="mt-6 rounded-lg bg-slate-50 p-4 text-left text-sm"><div className="flex justify-between py-1"><span className="text-slate-500">Stock value added</span><strong>{currency(total)}</strong></div><div className="flex justify-between py-1"><span className="text-slate-500">Supplier</span><strong>Shree Ram Suppliers</strong></div></div><Button className="mt-6" onClick={() => { setSuccess(false); setStep(1); }}>Scan another invoice</Button></Card></>;
-  return <>
-    <PageHeader title="Invoice Scanner" description="Turn supplier invoices into accurate stock updates." />
-    <div className="mb-5 flex items-center"><Step number={1} label="Scan" active={step >= 1} done={step > 1} /><Line active={step > 1} /><Step number={2} label="Review" active={step >= 2} done={step > 2} /><Line active={step > 2} /><Step number={3} label="Import" active={step >= 3} done={false} /></div>
-    {step === 1 && <Card className="p-5"><div className="grid min-h-[520px] gap-5 lg:grid-cols-2"><button onClick={() => fileRef.current?.click()} className="grid place-items-center rounded-xl border-2 border-dashed border-slate-200 bg-slate-50 p-8 text-center transition hover:border-emerald-400 hover:bg-emerald-50/30"><input ref={fileRef} className="hidden" type="file" accept=".pdf,image/*" onChange={extract} /><div><span className="mx-auto grid size-14 place-items-center rounded-full bg-emerald-100 text-emerald-700"><Icon name="scan" size={26} /></span><h2 className="mt-4 font-bold text-slate-900">Upload a supplier invoice</h2><p className="mx-auto mt-2 max-w-xs text-sm leading-6 text-slate-500">Drop a PDF, JPG or PNG here, or click to browse. We’ll extract supplier and line-item details.</p><Button className="mt-5" type="button" onClick={e => { e.stopPropagation(); extract(); }}><Icon name="upload" size={16} />{loading ? "Extracting invoice…" : "Choose invoice"}</Button><p className="mt-3 text-xs text-slate-400">Try the prototype with a sample invoice</p></div></button><div className="rounded-xl border border-slate-200 p-6"><h2 className="font-bold text-slate-900">How it works</h2><div className="mt-6 space-y-6">{[["1","AI extracts every line item","Supplier, invoice number, taxes, quantities and prices."],["2","You review and match products","Confirm suggestions and resolve low-confidence fields."],["3","Stock updates instantly","Import validated items into your inventory records."]].map(x=><div className="flex gap-4" key={x[0]}><span className="grid size-8 shrink-0 place-items-center rounded-full bg-slate-100 text-sm font-bold text-slate-600">{x[0]}</span><div><h3 className="text-sm font-bold text-slate-800">{x[1]}</h3><p className="mt-1 text-sm leading-5 text-slate-500">{x[2]}</p></div></div>)}</div><div className="mt-8 rounded-lg border border-blue-100 bg-blue-50 p-4 text-sm text-blue-800"><strong>Prototype note</strong><p className="mt-1 text-xs leading-5 text-blue-700">No document is uploaded to a server. Extraction is simulated using realistic sample data.</p></div></div></div></Card>}
-    {step === 2 && <div className="grid gap-4 xl:grid-cols-[0.8fr_1.2fr]"><Card className="overflow-hidden"><div className="flex items-center justify-between border-b border-slate-100 p-4"><div><h2 className="font-bold text-slate-900">SRS_Invoice_1824.pdf</h2><p className="text-xs text-slate-500">1 page · 482 KB</p></div><Badge tone="success">Extracted</Badge></div><div className="m-4 min-h-[580px] rounded-lg bg-slate-100 p-5"><div className="mx-auto max-w-md bg-white p-7 shadow-sm"><div className="border-b-2 border-slate-800 pb-4 text-center"><h3 className="text-lg font-extrabold">SHREE RAM SUPPLIERS</h3><p className="text-[10px] text-slate-500">Dewas Naka, Indore · GSTIN 23AADFS2812H1Z8</p></div><div className="my-4 flex justify-between text-[10px]"><div><strong>Invoice: SRS-1824</strong><p>Date: 22 Mar 2025</p></div><div className="text-right"><strong>Verma Mini Mart</strong><p>Vijay Nagar, Indore</p></div></div><table className="w-full text-[9px]"><thead className="bg-slate-100"><tr><th className="p-2 text-left">Description</th><th>Qty</th><th>Rate</th><th>Amount</th></tr></thead><tbody>{items.map(x=><tr className="border-b" key={x.name}><td className="p-2">{x.name}</td><td>{x.qty}</td><td>{x.cost}</td><td>{(x.qty*x.cost).toFixed(0)}</td></tr>)}</tbody></table><div className="mt-6 text-right text-xs font-bold">Invoice Total: ₹10,238</div></div></div></Card><InvoiceReview items={items} update={update} onNext={() => setStep(3)} /> </div>}
-    {step === 3 && <ImportConfirm items={items} total={total} onBack={() => setStep(2)} onImport={() => { setLoading(true); setTimeout(() => { setLoading(false); setSuccess(true); }, 900); }} loading={loading} />}
-  </>;
+
+  const handleFileUpload = async (file?: File | null) => {
+    setError("");
+    setLoading(true);
+
+    if (file) {
+      setFileName(file.name);
+      if (file.type.startsWith("image/")) {
+        setFilePreview(URL.createObjectURL(file));
+      } else {
+        setFilePreview(null);
+      }
+    }
+
+    try {
+      const response = await scanInvoiceFile(file);
+      const invData = response.invoiceData;
+      setAvailableProducts(response.availableProducts || []);
+      setSourceFileUrl(response.sourceFileUrl || null);
+
+      if (invData.sellerName) setSupplierName(invData.sellerName);
+      if (invData.sellerGstin) setSupplierGstin(invData.sellerGstin);
+      if (invData.buyerName) setBuyerName(invData.buyerName);
+      if (invData.buyerGstin) setBuyerGstin(invData.buyerGstin);
+      if (invData.invoiceNumber) setInvoiceNumber(invData.invoiceNumber);
+      if (invData.invoiceDate) setInvoiceDate(invData.invoiceDate);
+      if (invData.paymentMode) setPaymentMode(invData.paymentMode.toUpperCase());
+      if (invData.subTotal !== undefined && invData.subTotal !== null) setSubtotal(Number(invData.subTotal));
+      if (invData.totalTaxAmount !== undefined && invData.totalTaxAmount !== null) setTaxAmount(Number(invData.totalTaxAmount));
+      
+      const billFinalAmount = invData.totalAmount !== undefined && invData.totalAmount !== null
+        ? Number(invData.totalAmount)
+        : invData.grandTotal !== undefined && invData.grandTotal !== null
+        ? Number(invData.grandTotal)
+        : null;
+      if (billFinalAmount !== null && !isNaN(billFinalAmount)) {
+        setGrandTotal(billFinalAmount);
+      }
+
+      const reviewItems: ReviewItem[] = (invData.items || []).map((item, index) => {
+        const itemLower = (item.itemName || "").toLowerCase();
+        const matched = (response.availableProducts || []).find(
+          (p) => p.name.toLowerCase() === itemLower || itemLower.includes(p.name.toLowerCase()) || p.name.toLowerCase().includes(itemLower)
+        );
+
+        const cost = Number(item.pricePerUnit) || 0;
+        const defaultSelling = matched ? matched.sellingPrice : Math.round(cost * 1.25);
+        const defaultMrp = matched && matched.mrp ? matched.mrp : Math.round(cost * 1.35);
+
+        const invDiscPct = item.discountPercentage !== undefined && item.discountPercentage !== null ? Number(item.discountPercentage) : 0;
+        const invDiscAmt = item.discountAmount !== undefined && item.discountAmount !== null ? Number(item.discountAmount) : 0;
+        const directLineTotal = item.totalAmount !== undefined && item.totalAmount !== null && !isNaN(Number(item.totalAmount))
+          ? Number(item.totalAmount)
+          : Math.round((cost * (Number(item.quantity) || 1)) * 100) / 100;
+
+        return {
+          id: `item-${index}-${Date.now()}`,
+          name: item.itemName,
+          matchedProductId: matched ? matched.id : null,
+          sku: matched ? matched.sku : "",
+          category: "General",
+          unit: item.unit || "Nos",
+          quantity: Number(item.quantity) || 1,
+          unitCost: cost,
+          taxRate: item.gstPercentage ? Number(item.gstPercentage) : 18,
+          taxAmount: item.gstAmount ? Number(item.gstAmount) : 0,
+          invoiceDiscountPercentage: invDiscPct,
+          invoiceDiscountAmount: invDiscAmt,
+          lineTotal: directLineTotal,
+          confidence: item.confidenceScore ? Math.round(Number(item.confidenceScore) * 100) : 92,
+          included: true,
+          sellingPrice: defaultSelling,
+          discountPercentage: invDiscPct > 0 ? invDiscPct : null,
+          mrp: defaultMrp,
+          description: "",
+          hsnSac: item.hsnSac || "",
+          showPitchInput: false,
+        };
+      });
+
+      setItems(reviewItems);
+      setStep(2);
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError("Failed to scan invoice. Please try again.");
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const syncTotalsFromItems = () => {
+    const included = items.filter((x) => x.included);
+    const sub = included.reduce((acc, x) => {
+      const base = x.quantity * x.unitCost;
+      const disc = x.invoiceDiscountAmount || (x.invoiceDiscountPercentage ? (base * x.invoiceDiscountPercentage) / 100 : 0);
+      return acc + (base - disc);
+    }, 0);
+    const tax = included.reduce((acc, x) => acc + (x.taxAmount || 0), 0);
+    const grand = included.reduce((acc, x) => acc + (x.lineTotal || 0), 0);
+    setSubtotal(Math.round(sub * 100) / 100);
+    setTaxAmount(Math.round(tax * 100) / 100);
+    setGrandTotal(Math.round(grand * 100) / 100);
+  };
+
+  const updateItem = (index: number, key: keyof ReviewItem, val: any) => {
+    setItems((prev) =>
+      prev.map((it, i) => {
+        if (i !== index) return it;
+        const updated = { ...it, [key]: val };
+        if (key === "matchedProductId") {
+          const selected = availableProducts.find((p) => p.id === val);
+          if (selected) {
+            updated.sku = selected.sku;
+            updated.sellingPrice = selected.sellingPrice;
+            if (selected.mrp) updated.mrp = selected.mrp;
+          }
+        }
+        if (key === "quantity" || key === "unitCost" || key === "invoiceDiscountPercentage" || key === "invoiceDiscountAmount" || key === "taxRate") {
+          const qty = key === "quantity" ? Number(val) : it.quantity;
+          const cost = key === "unitCost" ? Number(val) : it.unitCost;
+          const base = qty * cost;
+          let disc = 0;
+          if (key === "invoiceDiscountPercentage") {
+            const pct = Number(val) || 0;
+            disc = (base * pct) / 100;
+            updated.invoiceDiscountAmount = Math.round(disc * 100) / 100;
+          } else if (key === "invoiceDiscountAmount") {
+            disc = Number(val) || 0;
+            if (base > 0) {
+              updated.invoiceDiscountPercentage = Math.round((disc / base) * 100 * 10) / 10;
+            }
+          } else {
+            disc = it.invoiceDiscountPercentage ? (base * it.invoiceDiscountPercentage) / 100 : it.invoiceDiscountAmount;
+          }
+          const taxRate = key === "taxRate" ? Number(val) : it.taxRate;
+          const taxable = Math.max(0, base - disc);
+          const tax = taxRate ? (taxable * taxRate) / 100 : 0;
+          updated.taxAmount = Math.round(tax * 100) / 100;
+          updated.lineTotal = Math.round((taxable + tax) * 100) / 100;
+        }
+        return updated;
+      })
+    );
+  };
+
+  const handleConfirmSave = async () => {
+    const includedItems = items.filter((x) => x.included);
+    if (includedItems.length === 0) {
+      setError("Please select at least one item to import.");
+      return;
+    }
+
+    for (const item of includedItems) {
+      if (!item.sellingPrice || item.sellingPrice <= 0) {
+        setError(`Please specify a valid selling price for "${item.name}".`);
+        return;
+      }
+    }
+
+    setError("");
+    setSaving(true);
+
+    try {
+      const payload: SavePurchaseInvoicePayload = {
+        invoiceNumber: invoiceNumber.trim() || `INV-${Date.now()}`,
+        invoiceDate: invoiceDate || new Date().toISOString().split("T")[0],
+        paymentMode: paymentMode || "CREDIT",
+        supplierName: supplierName.trim() || "Unknown Supplier",
+        supplierGstin: supplierGstin.trim() || undefined,
+        supplierPhone: supplierPhone.trim() || undefined,
+        buyerName: buyerName.trim() || undefined,
+        buyerGstin: buyerGstin.trim() || undefined,
+        subtotal: subtotal,
+        taxAmount: taxAmount,
+        totalAmount: grandTotal,
+        sourceFileUrl: sourceFileUrl || undefined,
+        items: includedItems.map((item) => {
+          let effDiscountPrice: number | undefined = undefined;
+          if (item.discountPercentage !== null && item.discountPercentage > 0) {
+            effDiscountPrice = Math.round(item.sellingPrice * (1 - item.discountPercentage / 100) * 100) / 100;
+          }
+
+          let discountAmountToSave = item.invoiceDiscountAmount;
+          if ((!discountAmountToSave || discountAmountToSave === 0) && item.discountPercentage !== null && item.discountPercentage > 0) {
+            discountAmountToSave = Math.round((item.unitCost * item.quantity * item.discountPercentage) / 100 * 100) / 100;
+          }
+
+          return {
+            matchedProductId: item.matchedProductId || undefined,
+            name: item.name.trim(),
+            sku: item.sku.trim() || undefined,
+            category: item.category.trim() || undefined,
+            unit: item.unit.trim() || undefined,
+            quantity: item.quantity,
+            unitCost: item.unitCost,
+            taxRate: item.taxRate,
+            taxAmount: item.taxAmount,
+            discountPercentage: item.discountPercentage !== null ? item.discountPercentage : undefined,
+            discountAmount: discountAmountToSave,
+            lineTotal: item.lineTotal,
+            matchConfidence: item.confidence ? item.confidence / 100 : undefined,
+            sellingPrice: item.sellingPrice,
+            discountPrice: effDiscountPrice,
+            mrp: item.mrp !== null ? item.mrp : undefined,
+            description: item.description.trim() || undefined,
+            hsnSac: item.hsnSac.trim() || undefined,
+          };
+        }),
+      };
+
+      const saved = await savePurchaseInvoice(payload);
+      setSuccessResult(saved);
+      setStep(3);
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError("Failed to save purchase invoice.");
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const activeItems = items.filter((x) => x.included);
+  const totalUnits = activeItems.reduce((acc, x) => acc + x.quantity, 0);
+  const totalCostValue = activeItems.reduce((acc, x) => acc + x.lineTotal, 0);
+  const totalRetailValue = activeItems.reduce((acc, x) => {
+    const effPrice = x.discountPercentage !== null && x.discountPercentage > 0
+      ? x.sellingPrice * (1 - x.discountPercentage / 100)
+      : x.sellingPrice;
+    return acc + x.quantity * effPrice;
+  }, 0);
+
+  return (
+    <>
+      <PageHeader
+        title="Invoice Scanner"
+        description="Extract supplier invoices, review selling prices & pitches, and post directly to inventory."
+      />
+
+      <div className="mb-5 flex items-center">
+        <Step number={1} label="Scan" active={step >= 1} done={step > 1} />
+        <Line active={step > 1} />
+        <Step number={2} label="Review & Pricing" active={step >= 2} done={step > 2} />
+        <Line active={step > 2} />
+        <Step number={3} label="Saved to Inventory" active={step >= 3} done={step === 3} />
+      </div>
+
+      {error && (
+        <div className="mb-4 flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 p-4 text-xs font-medium text-rose-700">
+          <Icon className="shrink-0" name="warning" size={16} />
+          <span>{error}</span>
+        </div>
+      )}
+
+      {step === 1 && (
+        <Card className="p-5">
+          <div className="grid min-h-[460px] gap-6 lg:grid-cols-2">
+            <button
+              onClick={() => fileRef.current?.click()}
+              className="group grid place-items-center rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50 p-8 text-center transition hover:border-emerald-500 hover:bg-emerald-50/20"
+              disabled={loading}
+            >
+              <input
+                ref={fileRef}
+                className="hidden"
+                type="file"
+                accept=".pdf,image/png,image/jpeg,image/webp"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) handleFileUpload(f);
+                }}
+              />
+              <div>
+                <span className="mx-auto grid size-16 place-items-center rounded-2xl bg-emerald-100 text-emerald-700 transition group-hover:scale-105">
+                  <Icon name="scan" size={30} />
+                </span>
+                <h2 className="mt-4 text-base font-bold text-slate-900">Upload supplier invoice</h2>
+                <p className="mx-auto mt-2 max-w-xs text-xs leading-5 text-slate-500">
+                  Select a PNG, JPG, or PDF purchase invoice. Multi-modal AI will extract vendor information, line items, rates, discounts and taxes.
+                </p>
+                <div className="mt-6 flex flex-wrap justify-center gap-2">
+                  <Button
+                    type="button"
+                    disabled={loading}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      fileRef.current?.click();
+                    }}
+                  >
+                    <Icon name="upload" size={16} />
+                    {loading ? "Extracting invoice…" : "Select Invoice File"}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={loading}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleFileUpload(null);
+                    }}
+                  >
+                    Load Sample Invoice
+                  </Button>
+                </div>
+              </div>
+            </button>
+
+            <div className="flex flex-col justify-between rounded-2xl border border-slate-200 bg-white p-6">
+              <div>
+                <h3 className="font-bold text-slate-900">Automated Intake Process</h3>
+                <div className="mt-5 space-y-4">
+                  <div className="flex gap-3">
+                    <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-emerald-50 text-xs font-bold text-emerald-700">1</span>
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-800">OCR & Document Parsing</h4>
+                      <p className="mt-0.5 text-xs leading-5 text-slate-500">Extracts seller, buyer (Bill To), HSN/SAC codes, row discounts, GST %, and totals.</p>
+                    </div>
+                  </div>
+                  <div className="flex gap-3">
+                    <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-emerald-50 text-xs font-bold text-emerald-700">2</span>
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-800">Catalogue Matching & Pricing Review</h4>
+                      <p className="mt-0.5 text-xs leading-5 text-slate-500">Matches existing products. Set Selling Price, MRP, Retail Discount %, editable line totals, and pitch descriptions.</p>
+                    </div>
+                  </div>
+                  <div className="flex gap-3">
+                    <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-emerald-50 text-xs font-bold text-emerald-700">3</span>
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-800">Instant Inventory & Cost Ledger Update</h4>
+                      <p className="mt-0.5 text-xs leading-5 text-slate-500">Increments stock on hand, recalculates weighted average purchase cost, and writes stock movement entries.</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-6 rounded-xl border border-blue-100 bg-blue-50/70 p-4 text-xs text-blue-800">
+                <span className="font-bold">Ollama / AI Integration:</span> When Ollama is active, OCR text and image inputs are parsed using strict row alignment to prevent line shifts.
+              </div>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {step === 2 && (
+        <div className="space-y-4">
+          <Card>
+            <div className="flex flex-col justify-between gap-3 border-b border-slate-100 p-4 sm:flex-row sm:items-center">
+              <div>
+                <div className="flex items-center gap-2">
+                  <h2 className="font-bold text-slate-900">Review & Set Retail Pricing</h2>
+                  <Badge tone="success">Extracted</Badge>
+                </div>
+                <p className="mt-0.5 text-xs text-slate-500">
+                  {items.length} items extracted from {fileName}. Adjust selling price, MRP, discount percentage, line totals, and optional pitch descriptions.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Button variant="secondary" onClick={() => setShowPreviewModal(true)}>
+                  <Icon name="file" size={15} />
+                  View Original Document
+                </Button>
+                <Button variant="ghost" onClick={() => setStep(1)}>
+                  Rescan
+                </Button>
+              </div>
+            </div>
+
+            <div className="grid gap-3 border-b border-slate-100 bg-slate-50/70 p-4 sm:grid-cols-2 lg:grid-cols-4">
+              <label className="text-xs font-semibold text-slate-600">
+                Seller (Supplier)
+                <Input className="mt-1" value={supplierName} onChange={(e) => setSupplierName(e.target.value)} />
+              </label>
+              <label className="text-xs font-semibold text-slate-600">
+                Seller GSTIN
+                <Input className="mt-1" value={supplierGstin} onChange={(e) => setSupplierGstin(e.target.value)} />
+              </label>
+              <label className="text-xs font-semibold text-slate-600">
+                Buyer (Bill To)
+                <Input className="mt-1" value={buyerName} onChange={(e) => setBuyerName(e.target.value)} />
+              </label>
+              <label className="text-xs font-semibold text-slate-600">
+                Buyer GSTIN
+                <Input className="mt-1" value={buyerGstin} onChange={(e) => setBuyerGstin(e.target.value)} />
+              </label>
+
+              <label className="text-xs font-semibold text-slate-600">
+                Invoice Number
+                <Input className="mt-1" value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} />
+              </label>
+              <label className="text-xs font-semibold text-slate-600">
+                Invoice Date
+                <Input className="mt-1" type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} />
+              </label>
+              <label className="text-xs font-semibold text-slate-600">
+                Payment Mode
+                <Select className="mt-1 w-full" value={paymentMode} onChange={(e) => setPaymentMode(e.target.value)}>
+                  <option value="CREDIT">CREDIT</option>
+                  <option value="CASH">CASH</option>
+                  <option value="UPI">UPI</option>
+                  <option value="BANK_TRANSFER">BANK_TRANSFER</option>
+                </Select>
+              </label>
+              <label className="text-xs font-semibold text-slate-600">
+                Supplier Phone
+                <Input className="mt-1" value={supplierPhone} onChange={(e) => setSupplierPhone(e.target.value)} />
+              </label>
+            </div>
+
+            <div className="grid gap-3 border-b border-slate-100 bg-emerald-50/40 p-3 sm:grid-cols-4 text-xs">
+              <label className="font-semibold text-slate-700">
+                Sub Total (₹)
+                <Input
+                  className="mt-1 bg-white font-bold text-slate-900"
+                  type="number"
+                  step="0.01"
+                  value={subtotal}
+                  onChange={(e) => setSubtotal(Number(e.target.value))}
+                />
+              </label>
+              <label className="font-semibold text-slate-700">
+                Total GST / Tax (₹)
+                <Input
+                  className="mt-1 bg-white font-bold text-slate-900"
+                  type="number"
+                  step="0.01"
+                  value={taxAmount}
+                  onChange={(e) => setTaxAmount(Number(e.target.value))}
+                />
+              </label>
+              <label className="font-semibold text-slate-700">
+                Grand Total (₹)
+                <Input
+                  className="mt-1 bg-white font-bold text-emerald-800"
+                  type="number"
+                  step="0.01"
+                  value={grandTotal}
+                  onChange={(e) => setGrandTotal(Number(e.target.value))}
+                />
+              </label>
+              <div className="flex items-end">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="w-full text-xs"
+                  onClick={syncTotalsFromItems}
+                >
+                  <Icon name="refresh" size={14} />
+                  Recalculate from Items
+                </Button>
+              </div>
+            </div>
+
+            <div className="divide-y divide-slate-100">
+              {items.map((item, index) => (
+                <div key={item.id} className={`p-4 transition ${!item.included ? "bg-slate-50/60 opacity-60" : "hover:bg-slate-50/30"}`}>
+                  <div className="flex items-start gap-3">
+                    <input
+                      checked={item.included}
+                      className="mt-2 size-4 accent-emerald-600"
+                      type="checkbox"
+                      onChange={(e) => updateItem(index, "included", e.target.checked)}
+                    />
+                    <div className="min-w-0 flex-1 space-y-3">
+                      <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-center">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-bold text-slate-500">#{index + 1}</span>
+                          <Input
+                            className="h-8 max-w-sm font-semibold text-slate-900"
+                            value={item.name}
+                            onChange={(e) => updateItem(index, "name", e.target.value)}
+                          />
+                          <Badge tone={item.confidence >= 90 ? "success" : item.confidence >= 70 ? "info" : "warning"}>
+                            {item.confidence}% Match
+                          </Badge>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            className="text-xs font-semibold text-emerald-700 hover:text-emerald-800"
+                            onClick={() => updateItem(index, "showPitchInput", !item.showPitchInput)}
+                          >
+                            {item.showPitchInput ? "Hide Pitch Notes" : "+ Add Pitch Description"}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-8">
+                        <label className="text-[11px] font-semibold text-slate-600 sm:col-span-2 lg:col-span-2">
+                          Matched Shop Product
+                          <Select
+                            className="mt-1 w-full text-xs"
+                            value={item.matchedProductId || ""}
+                            onChange={(e) => updateItem(index, "matchedProductId", e.target.value || null)}
+                          >
+                            <option value="">Create as new product</option>
+                            {availableProducts.map((p) => (
+                              <option key={p.id} value={p.id}>
+                                {p.name} ({p.sku}) - Current Stock: {p.stock}
+                              </option>
+                            ))}
+                          </Select>
+                        </label>
+
+                        <label className="text-[11px] font-semibold text-slate-600">
+                          HSN / SAC
+                          <Input
+                            className="mt-1 text-xs"
+                            placeholder="HSN code"
+                            value={item.hsnSac}
+                            onChange={(e) => updateItem(index, "hsnSac", e.target.value)}
+                          />
+                        </label>
+
+                        <label className="text-[11px] font-semibold text-slate-600">
+                          Qty & Unit
+                          <div className="mt-1 flex gap-1">
+                            <Input
+                              className="w-16 text-xs"
+                              type="number"
+                              min={1}
+                              value={item.quantity}
+                              onChange={(e) => updateItem(index, "quantity", Number(e.target.value))}
+                            />
+                            <Input
+                              className="w-16 text-xs"
+                              value={item.unit}
+                              onChange={(e) => updateItem(index, "unit", e.target.value)}
+                            />
+                          </div>
+                        </label>
+
+                        <label className="text-[11px] font-semibold text-slate-600">
+                          Buying Cost (₹)
+                          <Input
+                            className="mt-1 text-xs font-semibold"
+                            type="number"
+                            step="0.01"
+                            value={item.unitCost}
+                            onChange={(e) => updateItem(index, "unitCost", Number(e.target.value))}
+                          />
+                        </label>
+
+                        <label className="text-[11px] font-semibold text-slate-600">
+                          Bill Disc (% / ₹)
+                          <div className="mt-1 flex gap-1">
+                            <Input
+                              className="w-16 text-xs"
+                              type="number"
+                              step="0.1"
+                              placeholder="%"
+                              value={item.invoiceDiscountPercentage || ""}
+                              onChange={(e) => updateItem(index, "invoiceDiscountPercentage", Number(e.target.value))}
+                            />
+                            <Input
+                              className="w-20 text-xs"
+                              type="number"
+                              step="0.01"
+                              placeholder="₹"
+                              value={item.invoiceDiscountAmount || ""}
+                              onChange={(e) => updateItem(index, "invoiceDiscountAmount", Number(e.target.value))}
+                            />
+                          </div>
+                        </label>
+
+                        <label className="text-[11px] font-semibold text-slate-600">
+                          GST (% / ₹)
+                          <div className="mt-1 flex gap-1">
+                            <Input
+                              className="w-14 text-xs"
+                              type="number"
+                              placeholder="%"
+                              value={item.taxRate}
+                              onChange={(e) => updateItem(index, "taxRate", Number(e.target.value))}
+                            />
+                            <Input
+                              className="w-20 text-xs"
+                              type="number"
+                              step="0.01"
+                              placeholder="₹"
+                              value={item.taxAmount}
+                              onChange={(e) => updateItem(index, "taxAmount", Number(e.target.value))}
+                            />
+                          </div>
+                        </label>
+
+                        <label className="text-[11px] font-bold text-slate-700">
+                          Line Total (₹)
+                          <Input
+                            className="mt-1 text-xs font-bold text-slate-900 border-slate-300"
+                            type="number"
+                            step="0.01"
+                            value={item.lineTotal}
+                            onChange={(e) => updateItem(index, "lineTotal", Number(e.target.value))}
+                          />
+                        </label>
+                      </div>
+
+                      <div className="grid gap-3 rounded-lg border border-slate-200/80 bg-slate-50/50 p-3 sm:grid-cols-2 lg:grid-cols-4">
+                        <label className="text-[11px] font-bold text-emerald-700">
+                          Selling Price (₹) <span className="text-rose-500">*</span>
+                          <Input
+                            className="mt-1 border-emerald-300 bg-white text-xs font-bold text-emerald-800 focus:border-emerald-600"
+                            type="number"
+                            step="0.01"
+                            value={item.sellingPrice}
+                            onChange={(e) => updateItem(index, "sellingPrice", Number(e.target.value))}
+                            required
+                          />
+                        </label>
+
+                        <label className="text-[11px] font-semibold text-slate-600">
+                          MRP (₹) <span className="font-normal text-slate-400">(optional)</span>
+                          <Input
+                            className="mt-1 text-xs"
+                            type="number"
+                            step="0.01"
+                            placeholder="Optional"
+                            value={item.mrp !== null ? item.mrp : ""}
+                            onChange={(e) => updateItem(index, "mrp", e.target.value ? Number(e.target.value) : null)}
+                          />
+                        </label>
+
+                        <label className="text-[11px] font-semibold text-slate-600">
+                          <div className="flex items-center justify-between">
+                            <span>Retail Discount (%)</span>
+                            {item.invoiceDiscountPercentage > 0 && (
+                              <button
+                                type="button"
+                                className="text-[10px] font-medium text-emerald-700 underline"
+                                onClick={() => updateItem(index, "discountPercentage", item.invoiceDiscountPercentage)}
+                              >
+                                Use Bill ({item.invoiceDiscountPercentage}%)
+                              </button>
+                            )}
+                          </div>
+                          <div className="mt-1 flex items-center gap-1.5">
+                            <Input
+                              className="text-xs"
+                              type="number"
+                              step="0.1"
+                              placeholder="0%"
+                              value={item.discountPercentage !== null ? item.discountPercentage : ""}
+                              onChange={(e) => updateItem(index, "discountPercentage", e.target.value ? Number(e.target.value) : null)}
+                            />
+                            {item.discountPercentage !== null && item.discountPercentage > 0 && (
+                              <span className="whitespace-nowrap text-[10px] font-bold text-emerald-700">
+                                Effective: {currency(Math.round(item.sellingPrice * (1 - item.discountPercentage / 100) * 100) / 100)}
+                              </span>
+                            )}
+                          </div>
+                        </label>
+
+                        <label className="text-[11px] font-semibold text-slate-600">
+                          SKU Code
+                          <Input
+                            className="mt-1 text-xs"
+                            placeholder="Auto generated"
+                            value={item.sku}
+                            onChange={(e) => updateItem(index, "sku", e.target.value)}
+                          />
+                        </label>
+                      </div>
+
+                      {item.showPitchInput && (
+                        <div className="rounded-lg border border-slate-200 bg-white p-3">
+                          <label className="block text-[11px] font-semibold text-slate-700">
+                            Product Description / AI Pitch Hook <span className="font-normal text-slate-400">(optional)</span>
+                            <textarea
+                              className="mt-1.5 w-full rounded-lg border border-slate-200 p-2.5 text-xs text-slate-800 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                              rows={2}
+                              placeholder="e.g. Inverter battery with 48 months warranty, ideal for power cuts and heavy commercial loads."
+                              value={item.description}
+                              onChange={(e) => updateItem(index, "description", e.target.value)}
+                            />
+                          </label>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex flex-col justify-between gap-3 border-t border-slate-100 bg-slate-50/70 p-4 sm:flex-row sm:items-center">
+              <div className="flex flex-wrap items-center gap-4 text-xs text-slate-600">
+                <span><strong>{activeItems.length}</strong> items selected</span>
+                <span>•</span>
+                <span><strong>{totalUnits}</strong> total units</span>
+                <span>•</span>
+                <span>Total Amount: <strong className="text-slate-900">{currency(grandTotal)}</strong></span>
+                <span>•</span>
+                <span>Retail Value: <strong className="text-emerald-700">{currency(totalRetailValue)}</strong></span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Button variant="secondary" onClick={() => setStep(1)}>
+                  Back
+                </Button>
+                <Button disabled={saving || activeItems.length === 0} onClick={handleConfirmSave}>
+                  <Icon name="check" size={16} />
+                  {saving ? "Posting to inventory…" : "Confirm & Post to Inventory"}
+                </Button>
+              </div>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {step === 3 && successResult && (
+        <Card className="mx-auto max-w-xl p-8 text-center sm:p-10">
+          <span className="mx-auto grid size-16 place-items-center rounded-2xl bg-emerald-100 text-emerald-700">
+            <Icon name="check" size={32} />
+          </span>
+          <h2 className="mt-4 text-2xl font-bold text-slate-900">Purchase Invoice Posted</h2>
+          <p className="mx-auto mt-2 max-w-md text-xs leading-6 text-slate-500">
+            Invoice {successResult.invoiceNumber} has been recorded into your database. Stock levels and weighted average purchase costs have been updated.
+          </p>
+
+          <div className="mt-6 divide-y divide-slate-100 rounded-xl border border-slate-200 bg-slate-50 text-left text-xs">
+            <div className="flex justify-between p-3">
+              <span className="text-slate-500">Invoice Number</span>
+              <strong className="text-slate-900">{successResult.invoiceNumber}</strong>
+            </div>
+            <div className="flex justify-between p-3">
+              <span className="text-slate-500">Supplier</span>
+              <strong className="text-slate-900">{successResult.supplierName}</strong>
+            </div>
+            <div className="flex justify-between p-3">
+              <span className="text-slate-500">Line Items Imported</span>
+              <strong className="text-slate-900">{successResult.itemsCount} products</strong>
+            </div>
+            <div className="flex justify-between p-3">
+              <span className="text-slate-500">Total Purchase Value</span>
+              <strong className="text-emerald-700">{currency(Number(successResult.totalAmount))}</strong>
+            </div>
+            <div className="flex justify-between p-3">
+              <span className="text-slate-500">Status</span>
+              <Badge tone="success">{successResult.status}</Badge>
+            </div>
+          </div>
+
+          <div className="mt-6 flex justify-center gap-3">
+            <Button
+              onClick={() => {
+                setSuccessResult(null);
+                setItems([]);
+                setStep(1);
+              }}
+            >
+              <Icon name="scan" size={16} />
+              Scan Another Invoice
+            </Button>
+          </div>
+        </Card>
+      )}
+
+      {showPreviewModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm"
+          onMouseDown={() => setShowPreviewModal(false)}
+        >
+          <Card className="max-h-[90vh] w-full max-w-3xl overflow-hidden shadow-2xl">
+            <div onMouseDown={(e) => e.stopPropagation()}>
+              <div className="flex items-center justify-between border-b border-slate-100 p-4">
+                <div>
+                  <h3 className="font-bold text-slate-900">Original Invoice Document</h3>
+                  <p className="text-xs text-slate-500">{fileName}</p>
+                </div>
+                <Button variant="ghost" onClick={() => setShowPreviewModal(false)}>
+                  <Icon name="close" size={16} />
+                </Button>
+              </div>
+
+              <div className="max-h-[70vh] overflow-auto p-4">
+                {filePreview ? (
+                  <img
+                    src={filePreview}
+                    alt="Invoice Preview"
+                    className="mx-auto rounded-lg border border-slate-200 object-contain shadow-sm"
+                  />
+                ) : (
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-6 text-xs text-slate-700">
+                    <div className="border-b-2 border-slate-900 pb-3 text-center">
+                      <h4 className="text-base font-extrabold uppercase">{supplierName}</h4>
+                      <p className="text-[10px] text-slate-500">GSTIN: {supplierGstin} • Phone: {supplierPhone}</p>
+                    </div>
+                    <div className="my-3 flex justify-between text-[11px]">
+                      <div>
+                        <strong>Invoice: {invoiceNumber}</strong>
+                        <p>Date: {invoiceDate}</p>
+                      </div>
+                      <div className="text-right">
+                        <strong>Bill To: {buyerName}</strong>
+                        <p>GSTIN: {buyerGstin}</p>
+                      </div>
+                    </div>
+                    <table className="w-full text-left text-[11px]">
+                      <thead className="bg-slate-200/60">
+                        <tr>
+                          <th className="p-2">Item</th>
+                          <th className="p-2">HSN</th>
+                          <th className="p-2">Qty</th>
+                          <th className="p-2">Rate</th>
+                          <th className="p-2">GST</th>
+                          <th className="p-2">Amount</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200">
+                        {items.map((it) => (
+                          <tr key={it.id}>
+                            <td className="p-2 font-medium">{it.name}</td>
+                            <td className="p-2 text-slate-500">{it.hsnSac || "-"}</td>
+                            <td className="p-2">{it.quantity} {it.unit}</td>
+                            <td className="p-2">{currency(it.unitCost)}</td>
+                            <td className="p-2">{it.taxRate}%</td>
+                            <td className="p-2 font-semibold">{currency(it.lineTotal)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    <div className="mt-4 flex justify-between border-t border-slate-300 pt-2 text-xs">
+                      <div>
+                        <span className="text-slate-500">Subtotal:</span> {currency(subtotal)} • <span className="text-slate-500">Tax:</span> {currency(taxAmount)}
+                      </div>
+                      <div className="font-bold text-slate-900">
+                        Total Amount: {currency(grandTotal)}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex justify-end border-t border-slate-100 p-3">
+                <Button variant="secondary" onClick={() => setShowPreviewModal(false)}>
+                  Close
+                </Button>
+              </div>
+            </div>
+          </Card>
+        </div>
+      )}
+    </>
+  );
 }
 
-function Step({ number, label, active, done }: { number: number; label: string; active: boolean; done: boolean }) { return <div className="flex items-center gap-2"><span className={`grid size-8 place-items-center rounded-full text-xs font-bold ${active ? "bg-emerald-600 text-white" : "bg-slate-200 text-slate-500"}`}>{done ? <Icon name="check" size={15} /> : number}</span><span className={`text-sm font-semibold ${active ? "text-slate-800" : "text-slate-400"}`}>{label}</span></div>; }
-function Line({ active }: { active: boolean }) { return <div className={`mx-3 h-px max-w-24 flex-1 ${active ? "bg-emerald-600" : "bg-slate-200"}`} />; }
+function PurchasesScreen({ onNavigate }: { onNavigate: (page: string) => void }) {
+  const [invoices, setInvoices] = useState<PurchaseInvoiceDto[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState("");
 
-function InvoiceReview({ items, update, onNext }: { items: InvoiceItem[]; update: (i: number, key: keyof InvoiceItem, value: string | number | boolean) => void; onNext: () => void }) {
-  return <Card><div className="flex items-center justify-between border-b border-slate-100 p-4"><div><h2 className="font-bold text-slate-900">Review extracted items</h2><p className="text-xs text-slate-500">{items.length} line items · 1 needs review</p></div><Badge tone="warning"><Icon name="warning" size={12} />&nbsp; Check highlighted fields</Badge></div><div className="grid gap-3 border-b border-slate-100 bg-slate-50 p-4 sm:grid-cols-3"><label className="text-xs font-semibold text-slate-500">Supplier<Input className="mt-1.5" defaultValue="Shree Ram Suppliers" /></label><label className="text-xs font-semibold text-slate-500">Invoice number<Input className="mt-1.5" defaultValue="SRS-1824" /></label><label className="text-xs font-semibold text-slate-500">Invoice date<Input className="mt-1.5" defaultValue="2025-03-22" type="date" /></label></div><div className="divide-y divide-slate-100">{items.map((item, i)=><div className={`p-4 ${!item.included ? "opacity-50" : ""}`} key={item.name}><div className="flex items-start gap-3"><input checked={item.included} className="mt-1 size-4 accent-emerald-600" type="checkbox" onChange={e=>update(i,"included",e.target.checked)} /><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><h3 className="truncate text-sm font-bold text-slate-800">{item.name}</h3><Badge tone={item.confidence > 80 ? "success" : "warning"}>{item.confidence}%</Badge></div><div className="mt-3 grid grid-cols-[1fr_72px_90px] gap-2"><Select className={item.confidence < 60 ? "border-amber-400 bg-amber-50" : ""} value={item.match} onChange={e=>update(i,"match",e.target.value)}><option>{item.match}</option><option>Create as new product</option><option>No match — choose product</option></Select><Input type="number" value={item.qty} onChange={e=>update(i,"qty",Number(e.target.value))} /><Input type="number" value={item.cost} onChange={e=>update(i,"cost",Number(e.target.value))} /></div><div className="mt-1 grid grid-cols-[1fr_72px_90px] gap-2 text-[10px] text-slate-400"><span>Product match</span><span>Quantity</span><span>Unit cost</span></div>{item.confidence < 60 && <p className="mt-2 flex items-center gap-1 text-xs font-medium text-amber-700"><Icon name="warning" size={13} />No confident catalogue match. This will create a new product.</p>}</div></div></div>)}</div><div className="flex items-center justify-between border-t border-slate-100 p-4"><p className="text-xs text-slate-500">{items.filter(x=>x.included).length} of {items.length} items included</p><Button onClick={onNext}>Continue to import <Icon name="arrow" size={15} /></Button></div></Card>;
+  const loadInvoices = () => {
+    setLoading(true);
+    fetchPurchaseInvoices()
+      .then(res => {
+        setInvoices(res);
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    loadInvoices();
+  }, []);
+
+  const filtered = useMemo(() => {
+    return invoices.filter(inv => {
+      const q = query.toLowerCase();
+      return (
+        inv.invoiceNumber.toLowerCase().includes(q) ||
+        (inv.supplierName && inv.supplierName.toLowerCase().includes(q))
+      );
+    });
+  }, [invoices, query]);
+
+  const totalSpent = useMemo(() => invoices.reduce((acc, inv) => acc + Number(inv.totalAmount || 0), 0), [invoices]);
+  const totalItems = useMemo(() => invoices.reduce((acc, inv) => acc + (inv.itemsCount || 0), 0), [invoices]);
+
+  return (
+    <>
+      <PageHeader
+        title="Purchases"
+        description="Track your real supplier bills, line items, and invoice totals."
+        actions={
+          <>
+            <Button variant="secondary" onClick={loadInvoices}>
+              <Icon name="refresh" size={16} />
+              Refresh
+            </Button>
+            <Button onClick={() => onNavigate("Invoice Scanner")}>
+              <Icon name="scan" size={16} />
+              Scan New Invoice
+            </Button>
+          </>
+        }
+      />
+      <div className="grid gap-3 sm:grid-cols-3 mb-4">
+        <MetricCard title="Total Purchase Invoices" value={String(invoices.length)} meta="Inward bills logged" icon="cart" tone="blue" />
+        <MetricCard title="Total Spend" value={currency(totalSpent)} meta="Cumulative purchase value" icon="report" tone="emerald" />
+        <MetricCard title="Total Items Inwarded" value={String(totalItems)} meta="Stock units received" icon="box" />
+      </div>
+      <Card>
+        <div className="flex gap-3 border-b border-slate-100 p-4">
+          <div className="relative flex-1">
+            <Icon className="absolute left-3 top-2.5 text-slate-400" name="search" size={16} />
+            <Input
+              className="pl-9"
+              placeholder="Search by invoice number or supplier name..."
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+            />
+          </div>
+        </div>
+        {loading ? (
+          <div className="p-16 text-center text-sm text-slate-500">Loading purchase invoices from database...</div>
+        ) : filtered.length === 0 ? (
+          <div className="grid place-items-center py-20 text-center">
+            <span className="grid size-12 place-items-center rounded-full bg-slate-100 text-slate-400">
+              <Icon name="cart" />
+            </span>
+            <h3 className="mt-3 font-bold text-slate-800">No purchase invoices found</h3>
+            <p className="mt-1 text-sm text-slate-500">Scan your first supplier bill using the Invoice Scanner.</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[800px] text-left text-sm">
+              <thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500">
+                <tr>
+                  <th className="px-5 py-3 font-semibold">Invoice #</th>
+                  <th className="px-5 py-3 font-semibold">Supplier</th>
+                  <th className="px-5 py-3 font-semibold">Invoice Date</th>
+                  <th className="px-5 py-3 font-semibold">Items</th>
+                  <th className="px-5 py-3 font-semibold">Total Amount</th>
+                  <th className="px-5 py-3 font-semibold">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filtered.map(inv => (
+                  <tr className="hover:bg-slate-50" key={inv.id}>
+                    <td className="px-5 py-4 font-semibold text-slate-800">{inv.invoiceNumber}</td>
+                    <td className="px-5 py-4 text-slate-700">{inv.supplierName}</td>
+                    <td className="px-5 py-4 text-slate-500">{inv.invoiceDate}</td>
+                    <td className="px-5 py-4 font-medium text-slate-600">{inv.itemsCount} items</td>
+                    <td className="px-5 py-4 font-bold text-slate-900">{currency(Number(inv.totalAmount))}</td>
+                    <td className="px-5 py-4">
+                      <Badge tone={inv.status === "COMPLETED" ? "success" : "info"}>{inv.status}</Badge>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+    </>
+  );
 }
 
-function ImportConfirm({ items, total, onBack, onImport, loading }: { items: InvoiceItem[]; total: number; onBack: () => void; onImport: () => void; loading: boolean }) {
-  const count = items.filter(x=>x.included).reduce((s,x)=>s+x.qty,0);
-  return <div className="mx-auto max-w-4xl"><div className="grid gap-4 sm:grid-cols-3"><MetricCard title="Items to import" value={`${items.filter(x=>x.included).length}`} meta={`${count} total units`} icon="box" /><MetricCard title="Purchase value" value={currency(total)} meta="Before GST adjustments" icon="cart" tone="blue" /><MetricCard title="New products" value="1" meta="Will be added to catalogue" icon="plus" tone="amber" /></div><Card className="mt-4"><div className="border-b border-slate-100 p-5"><h2 className="font-bold text-slate-900">Expected stock changes</h2><p className="text-xs text-slate-500">Review the final changes before importing.</p></div><div className="divide-y divide-slate-100">{items.filter(x=>x.included).map(x=><div className="flex items-center gap-4 px-5 py-3 text-sm" key={x.name}><span className="grid size-8 place-items-center rounded bg-slate-100 text-slate-500"><Icon name="box" size={15} /></span><div className="min-w-0 flex-1"><p className="truncate font-semibold text-slate-800">{x.match}</p><p className="text-xs text-slate-400">{currency(x.cost)} per unit</p></div><span className="text-slate-500">Current {products.find(p=>p.name===x.match)?.stock || 0}</span><Icon name="arrow" size={14} /><strong className="text-emerald-700">+{x.qty} units</strong></div>)}</div><div className="m-5 flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800"><Icon name="warning" className="mt-0.5 shrink-0" /><div><strong>1 validation note</strong><p className="mt-1 text-xs">CLEANMAX FLOOR 1L will be created without a barcode. You can add one later from Products.</p></div></div><div className="flex justify-between border-t border-slate-100 p-4"><Button variant="secondary" onClick={onBack}>Back to review</Button><Button disabled={loading} onClick={onImport}>{loading ? "Updating inventory…" : "Confirm and import"}<Icon name="check" size={15} /></Button></div></Card></div>;
-}
+function SuppliersScreen() {
+  const [suppliers, setSuppliers] = useState<SupplierSummary[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState("");
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [form, setForm] = useState({ name: "", phone: "", gstin: "" });
+  const [submitting, setSubmitting] = useState(false);
+  const [err, setErr] = useState("");
 
-const screenData: Record<string, { title: string; desc: string; cols: string[]; rows: string[][] }> = {
-  Purchases: { title: "Purchases", desc: "Track supplier invoices, payments and purchase history.", cols: ["Invoice", "Supplier", "Date", "Items", "Amount", "Status"], rows: [["SRS-1824","Shree Ram Suppliers","22 Mar 2025","4","₹10,238","Paid"],["MFD-8842","Metro Foods Distributors","19 Mar 2025","18","₹48,620","Due in 4 days"],["ICP-1092","Indore Consumer Products","16 Mar 2025","11","₹32,450","Paid"],["SKT-7702","Shakti Traders","12 Mar 2025","8","₹18,940","Overdue"]] },
-  Sales: { title: "Sales", desc: "Monitor sales performance and product movement.", cols: ["Period", "Orders", "Gross sales", "Cost", "Gross profit", "Margin"], rows: [["This week","842","₹2,18,420","₹1,68,180","₹50,240","23.0%"],["Last week","806","₹2,04,280","₹1,59,340","₹44,940","22.0%"],["01–07 Mar","774","₹1,94,840","₹1,53,240","₹41,600","21.4%"]] },
-  Suppliers: { title: "Suppliers", desc: "Manage supplier relationships, terms and purchasing trends.", cols: ["Supplier", "Products", "Last purchase", "YTD spend", "Payment terms", "Status"], rows: [["Shree Ram Suppliers","146","22 Mar 2025","₹4,82,600","15 days","Active"],["Metro Foods Distributors","84","19 Mar 2025","₹3,18,240","30 days","Active"],["Indore Consumer Products","61","16 Mar 2025","₹2,72,410","15 days","Active"],["Shakti Traders","38","12 Mar 2025","₹1,46,820","On delivery","Review"]] },
-  "Purchase Intelligence": { title: "Purchase Intelligence", desc: "Spot cost changes, margin risks and better supplier prices.", cols: ["Product", "Current cost", "Change", "Margin impact", "Best alternative", "Opportunity"], rows: [["Fortune Sunflower Oil 1L","₹114.50","+8.2%","−2.1 pts","Metro Foods · ₹109","Save ₹5.50/unit"],["Surf Excel Easy Wash 1 kg","₹128.00","+6.7%","−1.8 pts","Shakti Traders · ₹124","Save ₹4/unit"],["Dove Bathing Bar 3×125 g","₹171.00","+4.4%","−1.2 pts","Current supplier","Review selling price"],["Tata Salt 1 kg","₹24.00","0.0%","No change","Current supplier","Best price"]] },
-  "Dead Stock": { title: "Dead Stock", desc: "Recover capital from slow-moving and aging inventory.", cols: ["Product", "Stock", "Value tied up", "Last sale", "Days idle", "Suggested action"], rows: [["Kissan Mixed Fruit Jam 500 g","24","₹3,840","14 Dec 2024","99","Bundle & discount"],["Godrej Aer Pocket 10 g","42","₹2,730","28 Dec 2024","85","20% markdown"],["Horlicks Classic 500 g","12","₹3,960","06 Jan 2025","76","Return to supplier"],["Nivea Body Lotion 400 ml","9","₹2,430","18 Jan 2025","64","Promote at checkout"]] },
-  "Replenishment Planner": { title: "Replenishment Planner", desc: "Prevent stockouts with demand-aware reorder suggestions.", cols: ["Product", "On hand", "Daily sales", "Stockout in", "Suggested reorder", "Why"], rows: [["Surf Excel Easy Wash 1 kg","9","2.4","4 days","36 units","14 days cover + lead time"],["Aashirvaad Atta 5 kg","18","3.2","6 days","42 units","Demand up 18%"],["Britannia Good Day 600 g","0","1.8","Out now","30 units","Urgent stockout"],["Fortune Sunflower Oil 1L","42","4.1","10 days","24 units","Supplier lead time: 5 days"]] },
-};
+  const loadSuppliers = () => {
+    setLoading(true);
+    fetchSuppliers()
+      .then(res => {
+        setSuppliers(res);
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  };
 
-function DataScreen({ name }: { name: string }) {
-  const data = screenData[name];
-  return <><PageHeader title={data.title} description={data.desc} actions={<><Select><option>Last 30 days</option><option>Last quarter</option></Select><Button><Icon name="plus" size={16} />{name === "Suppliers" ? "Add supplier" : "Export view"}</Button></>} /><div className="grid gap-3 sm:grid-cols-3"><MetricCard title={name === "Dead Stock" ? "Capital tied up" : "Total value"} value={name === "Dead Stock" ? "₹42,680" : "₹3,24,820"} meta="Across this filtered view" icon="report" /><MetricCard title="Needs attention" value={name === "Replenishment Planner" ? "6" : "4"} meta="Prioritized actions" icon="warning" tone="amber" /><MetricCard title="Potential impact" value="₹18,400" meta="Estimated over 30 days" icon="trend" tone="blue" /></div><Card className="mt-4"><div className="flex gap-3 border-b border-slate-100 p-4"><div className="relative flex-1"><Icon className="absolute left-3 top-2.5 text-slate-400" name="search" size={16} /><Input className="pl-9" placeholder={`Search ${name.toLowerCase()}…`} /></div><Button variant="secondary"><Icon name="filter" size={15} />Filters</Button></div><div className="overflow-x-auto"><table className="w-full min-w-[800px] text-left text-sm"><thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500"><tr>{data.cols.map(c=><th className="px-5 py-3 font-semibold" key={c}>{c}</th>)}</tr></thead><tbody className="divide-y divide-slate-100">{data.rows.map((row,i)=><tr className="hover:bg-slate-50" key={i}>{row.map((cell,j)=><td className={`px-5 py-4 ${j===0 ? "font-semibold text-slate-800" : "text-slate-600"} ${cell.includes("+") ? "text-rose-600" : ""}`} key={j}>{j===row.length-1 ? <Badge tone={cell.includes("Overdue") || cell.includes("Review") ? "warning" : "success"}>{cell}</Badge> : cell}</td>)}</tr>)}</tbody></table></div></Card></>;
+  useEffect(() => {
+    loadSuppliers();
+  }, []);
+
+  const handleCreateSupplier = async () => {
+    if (!form.name.trim()) {
+      setErr("Supplier name is required");
+      return;
+    }
+    setSubmitting(true);
+    setErr("");
+    try {
+      await createSupplier(form);
+      setShowAddModal(false);
+      setForm({ name: "", phone: "", gstin: "" });
+      loadSuppliers();
+    } catch (e: any) {
+      setErr(e.message || "Failed to create supplier");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const filtered = useMemo(() => {
+    return suppliers.filter(s => {
+      const q = query.toLowerCase();
+      return (
+        s.name.toLowerCase().includes(q) ||
+        (s.phone && s.phone.toLowerCase().includes(q)) ||
+        (s.gstin && s.gstin.toLowerCase().includes(q))
+      );
+    });
+  }, [suppliers, query]);
+
+  const totalSpendAll = useMemo(() => suppliers.reduce((acc, s) => acc + Number(s.totalSpend || 0), 0), [suppliers]);
+
+  return (
+    <>
+      <PageHeader
+        title="Suppliers"
+        description="View your active suppliers, GSTIN numbers, contact details, and historical spend."
+        actions={
+          <>
+            <Button variant="secondary" onClick={loadSuppliers}>
+              <Icon name="refresh" size={16} />
+              Refresh
+            </Button>
+            <Button onClick={() => setShowAddModal(true)}>
+              <Icon name="plus" size={16} />
+              Add Supplier
+            </Button>
+          </>
+        }
+      />
+      <div className="grid gap-3 sm:grid-cols-3 mb-4">
+        <MetricCard title="Total Suppliers" value={String(suppliers.length)} meta="Registered vendors" icon="users" tone="blue" />
+        <MetricCard title="Cumulative Spend" value={currency(totalSpendAll)} meta="Across all suppliers" icon="report" tone="emerald" />
+        <MetricCard title="Average Spend / Supplier" value={currency(suppliers.length ? totalSpendAll / suppliers.length : 0)} meta="Average per vendor" icon="trend" />
+      </div>
+      <Card>
+        <div className="flex gap-3 border-b border-slate-100 p-4">
+          <div className="relative flex-1">
+            <Icon className="absolute left-3 top-2.5 text-slate-400" name="search" size={16} />
+            <Input
+              className="pl-9"
+              placeholder="Search by supplier name, phone, or GSTIN..."
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+            />
+          </div>
+        </div>
+        {loading ? (
+          <div className="p-16 text-center text-sm text-slate-500">Loading suppliers from database...</div>
+        ) : filtered.length === 0 ? (
+          <div className="grid place-items-center py-20 text-center">
+            <span className="grid size-12 place-items-center rounded-full bg-slate-100 text-slate-400">
+              <Icon name="users" />
+            </span>
+            <h3 className="mt-3 font-bold text-slate-800">No suppliers found</h3>
+            <p className="mt-1 text-sm text-slate-500">Add a supplier manually or scan an invoice to automatically register them.</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[800px] text-left text-sm">
+              <thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500">
+                <tr>
+                  <th className="px-5 py-3 font-semibold">Supplier Name</th>
+                  <th className="px-5 py-3 font-semibold">Phone</th>
+                  <th className="px-5 py-3 font-semibold">GSTIN</th>
+                  <th className="px-5 py-3 font-semibold">Total Invoices</th>
+                  <th className="px-5 py-3 font-semibold">Total Spend</th>
+                  <th className="px-5 py-3 font-semibold">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filtered.map(s => (
+                  <tr className="hover:bg-slate-50" key={s.id}>
+                    <td className="px-5 py-4 font-semibold text-slate-800">{s.name}</td>
+                    <td className="px-5 py-4 text-slate-600">{s.phone || "—"}</td>
+                    <td className="px-5 py-4 font-mono text-xs text-slate-500">{s.gstin || "—"}</td>
+                    <td className="px-5 py-4 font-medium text-slate-700">{s.totalInvoices} bills</td>
+                    <td className="px-5 py-4 font-bold text-slate-900">{currency(Number(s.totalSpend || 0))}</td>
+                    <td className="px-5 py-4">
+                      <Badge tone="success">Active</Badge>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
+      {showAddModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm" onMouseDown={() => setShowAddModal(false)}>
+          <Card className="w-full max-w-md shadow-2xl">
+            <div onMouseDown={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between border-b border-slate-100 p-5">
+                <h2 className="text-lg font-bold text-slate-900">Add New Supplier</h2>
+                <Button variant="ghost" onClick={() => setShowAddModal(false)}>
+                  <Icon name="close" />
+                </Button>
+              </div>
+              {err && <div className="m-4 rounded-lg bg-rose-50 p-3 text-sm text-rose-700">{err}</div>}
+              <div className="space-y-4 p-5">
+                <label className="block text-xs font-semibold text-slate-600">
+                  Supplier Name *
+                  <Input
+                    className="mt-1.5"
+                    value={form.name}
+                    onChange={e => setForm({ ...form, name: e.target.value })}
+                    placeholder="e.g. Metro Food Distributors"
+                  />
+                </label>
+                <label className="block text-xs font-semibold text-slate-600">
+                  Phone Number
+                  <Input
+                    className="mt-1.5"
+                    value={form.phone}
+                    onChange={e => setForm({ ...form, phone: e.target.value })}
+                    placeholder="e.g. +91 98765 43210"
+                  />
+                </label>
+                <label className="block text-xs font-semibold text-slate-600">
+                  GSTIN
+                  <Input
+                    className="mt-1.5"
+                    value={form.gstin}
+                    onChange={e => setForm({ ...form, gstin: e.target.value.toUpperCase() })}
+                    placeholder="e.g. 27AAAAA0000A1Z5"
+                  />
+                </label>
+              </div>
+              <div className="flex justify-end gap-2 border-t border-slate-100 p-4">
+                <Button variant="secondary" onClick={() => setShowAddModal(false)}>
+                  Cancel
+                </Button>
+                <Button disabled={submitting} onClick={handleCreateSupplier}>
+                  <Icon name="check" size={16} />
+                  {submitting ? "Saving..." : "Save Supplier"}
+                </Button>
+              </div>
+            </div>
+          </Card>
+        </div>
+      )}
+    </>
+  );
 }
 
 function AIAssistant() {
@@ -1100,6 +2449,10 @@ export default function App() {
   const [active, setActive] = useState("Overview");
   const [sidebar, setSidebar] = useState(() => localStorage.getItem("sidebar_open") === "true");
 
+  const [showScanner, setShowScanner] = useState(false);
+  const [scannedProduct, setScannedProduct] = useState<ProductDetail | null>(null);
+  const [qrModalProduct, setQrModalProduct] = useState<ProductDetail | null>(null);
+
   useEffect(() => {
     localStorage.setItem("sidebar_open", String(sidebar));
   }, [sidebar]);
@@ -1119,16 +2472,34 @@ export default function App() {
     }
   }, []);
 
+  const openQrModal = (p: any) => {
+    const detail: ProductDetail = {
+      id: p.id || p.sku,
+      name: p.name,
+      sku: p.sku,
+      category: p.category,
+      sellingPrice: Number(p.price || p.sellingPrice) || 0,
+      discountPrice: p.discountPrice ? Number(p.discountPrice) : undefined,
+      mrp: p.mrp ? Number(p.mrp) : undefined,
+      buyingPrice: p.cost ? Number(p.cost) : Number(p.buyingPrice) || 0,
+      lastPurchaseCost: p.cost ? Number(p.cost) : Number(p.lastPurchaseCost) || 0,
+      stock: Number(p.stock) || 0,
+      qrToken: p.qrToken || p.sku,
+      hsnSac: p.hsnSac,
+    };
+    setQrModalProduct(detail);
+  };
+
   const render = () => {
-    if (active === "Overview") return <Overview onNavigate={setActive} user={currentUser} onShopCreated={(u) => setCurrentUser(u)} />;
-    if (active === "Inventory") return <Inventory />;
-    if (active === "Products") return <Inventory productsMode />;
+    if (active === "Overview") return <Overview onNavigate={setActive} user={currentUser} onShopCreated={(u) => setCurrentUser(u)} onShowQr={openQrModal} />;
+    if (active === "Products" || active === "Inventory") return <ProductsScreen onShowQr={openQrModal} onScanQr={() => setShowScanner(true)} />;
     if (active === "Invoice Scanner") return <InvoiceScanner />;
-    if (screenData[active]) return <DataScreen name={active} />;
+    if (active === "Purchases") return <PurchasesScreen onNavigate={setActive} />;
+    if (active === "Suppliers") return <SuppliersScreen />;
     if (active === "AI Assistant") return <AIAssistant />;
     if (active === "Reports") return <Reports />;
     if (active === "Settings") return <Settings user={currentUser} onShopUpdated={(u) => setCurrentUser(u)} />;
-    return <Overview onNavigate={setActive} user={currentUser} onShopCreated={(u) => setCurrentUser(u)} />;
+    return <Overview onNavigate={setActive} user={currentUser} onShopCreated={(u) => setCurrentUser(u)} onShowQr={openQrModal} />;
   };
 
   if (!authenticated) return <AuthScreen onAuthenticated={(user) => { setCurrentUser(user); setAuthenticated(true); }} />;
@@ -1137,8 +2508,36 @@ export default function App() {
     <Sidebar active={active} onNavigate={setActive} open={sidebar} onClose={() => setSidebar(false)} onLogout={() => { logout(); setCurrentUser(null); setAuthenticated(false); setSidebar(false); }} user={currentUser} />
     {sidebar && <button aria-label="Close sidebar" className="fixed inset-0 z-30 bg-slate-950/30 lg:hidden" onClick={() => setSidebar(false)} />}
     <div className={`transition-[padding] duration-200 ${sidebar ? "lg:pl-64" : "pl-0"}`}>
-      <Header onMenu={() => setSidebar(prev => !prev)} onNavigate={setActive} sidebarOpen={sidebar} />
+      <Header onMenu={() => setSidebar(prev => !prev)} onNavigate={setActive} sidebarOpen={sidebar} onScanQr={() => setShowScanner(true)} />
       <main className="mx-auto max-w-[1600px] p-4 sm:p-6">{render()}</main>
     </div>
+
+    {showScanner && (
+      <QrScannerModal
+        onClose={() => setShowScanner(false)}
+        onProductFound={(prod) => {
+          setShowScanner(false);
+          setScannedProduct(prod);
+        }}
+      />
+    )}
+
+    {scannedProduct && (
+      <ProductPriceModal
+        product={scannedProduct}
+        onClose={() => setScannedProduct(null)}
+        onShowQr={(prod) => {
+          setScannedProduct(null);
+          setQrModalProduct(prod);
+        }}
+      />
+    )}
+
+    {qrModalProduct && (
+      <QrCodeModal
+        product={qrModalProduct}
+        onClose={() => setQrModalProduct(null)}
+      />
+    )}
   </div>;
 }

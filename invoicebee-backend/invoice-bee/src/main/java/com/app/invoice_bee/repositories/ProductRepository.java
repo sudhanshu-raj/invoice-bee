@@ -2,6 +2,9 @@ package com.app.invoice_bee.repositories;
 
 import com.app.invoice_bee.entities.Product;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
@@ -15,4 +18,8 @@ public interface ProductRepository extends JpaRepository<Product, UUID> {
     List<Product> findByShopId(UUID shopId);
     Optional<Product> findByQrToken(UUID qrToken);
     Optional<Product> findByShopIdAndQrToken(UUID shopId, UUID qrToken);
+
+    @Modifying
+    @Query("DELETE FROM Product p WHERE p.id IN :productIds AND p.shop.id = :shopId")
+    int deleteByIdsAndShopId(@Param("productIds") List<UUID> productIds, @Param("shopId") UUID shopId);
 }

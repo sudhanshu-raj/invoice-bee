@@ -13,6 +13,7 @@ public record PurchaseInvoiceDto(
         BigDecimal totalAmount,
         String status,
         int itemsCount,
-        OffsetDateTime createdAt
+        OffsetDateTime createdAt,
+        String sourceFileUrl
 ) {
 }

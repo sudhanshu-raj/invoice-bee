@@ -23,8 +23,17 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.UrlResource;
+import org.springframework.http.HttpHeaders;
+import org.springframework.web.bind.annotation.PathVariable;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/invoices")
@@ -82,9 +91,107 @@ public class InvoiceController {
                     inv.getTotalAmount(),
                     inv.getStatus().name(),
                     inv.getItems().size(),
-                    inv.getCreatedAt()
+                    inv.getCreatedAt(),
+                    inv.getSourceFileUrl()
             ));
         }
         return ResponseEntity.ok(result);
+    }
+
+    @GetMapping("/{id}")
+    public ResponseEntity<com.app.invoice_bee.dtos.PurchaseInvoiceDetailDto> getInvoiceById(
+            @org.springframework.web.bind.annotation.PathVariable("id") java.util.UUID id,
+            @AuthenticationPrincipal UserDetails userDetails
+    ) {
+        User user = userRepository.findByEmail(userDetails.getUsername())
+                .orElseThrow(() -> new IllegalArgumentException("User not found with email: " + userDetails.getUsername()));
+        Shop shop = user.getShop();
+        if (shop == null) {
+            return ResponseEntity.notFound().build();
+        }
+
+        PurchaseInvoice inv = purchaseInvoiceRepository.findByShopIdAndId(shop.getId(), id)
+                .orElseThrow(() -> new IllegalArgumentException("Invoice not found with id: " + id));
+
+        List<com.app.invoice_bee.dtos.PurchaseInvoiceItemDto> itemDtos = new ArrayList<>();
+        for (com.app.invoice_bee.entities.PurchaseInvoiceItem it : inv.getItems()) {
+            itemDtos.add(new com.app.invoice_bee.dtos.PurchaseInvoiceItemDto(
+                    it.getId(),
+                    it.getProduct() != null ? it.getProduct().getId() : null,
+                    it.getProduct() != null ? it.getProduct().getName() : it.getDescription(),
+                    it.getProduct() != null ? it.getProduct().getSku() : null,
+                    it.getDescription(),
+                    it.getQuantity(),
+                    it.getUnitCost(),
+                    it.getDiscountAmount(),
+                    it.getTaxRate(),
+                    it.getTaxAmount(),
+                    it.getLineTotal()
+            ));
+        }
+
+        com.app.invoice_bee.dtos.PurchaseInvoiceDetailDto detail = new com.app.invoice_bee.dtos.PurchaseInvoiceDetailDto(
+                inv.getId(),
+                inv.getInvoiceNumber(),
+                inv.getInvoiceDate(),
+                inv.getSupplier() != null ? inv.getSupplier().getName() : "Unknown",
+                inv.getSupplier() != null ? inv.getSupplier().getGstin() : null,
+                inv.getSupplier() != null ? inv.getSupplier().getPhone() : null,
+                inv.getPaymentMode() != null ? inv.getPaymentMode().name() : null,
+                inv.getSubtotal(),
+                inv.getTaxAmount(),
+                inv.getTotalAmount(),
+                inv.getStatus().name(),
+                inv.getSourceFileUrl(),
+                inv.getCreatedAt(),
+                inv.getPostedAt(),
+                itemDtos
+        );
+
+        return ResponseEntity.ok(detail);
+    }
+
+    @GetMapping("/{id}/file")
+    public ResponseEntity<Resource> getInvoiceFile(
+            @PathVariable("id") UUID id,
+            @AuthenticationPrincipal UserDetails userDetails
+    ) {
+        User user = userRepository.findByEmail(userDetails.getUsername())
+                .orElseThrow(() -> new IllegalArgumentException("User not found with email: " + userDetails.getUsername()));
+        Shop shop = user.getShop();
+        if (shop == null) {
+            return ResponseEntity.notFound().build();
+        }
+
+        PurchaseInvoice inv = purchaseInvoiceRepository.findByShopIdAndId(shop.getId(), id)
+                .orElseThrow(() -> new IllegalArgumentException("Invoice not found with id: " + id));
+
+        String sourceFileUrl = inv.getSourceFileUrl();
+        if (sourceFileUrl == null || sourceFileUrl.isBlank()) {
+            return ResponseEntity.notFound().build();
+        }
+
+        try {
+            String relativePath = sourceFileUrl.startsWith("/") ? sourceFileUrl.substring(1) : sourceFileUrl;
+            Path filePath = Paths.get(relativePath).normalize().toAbsolutePath();
+            Path allowedBase = Paths.get("uploads", "invoices").normalize().toAbsolutePath();
+
+            if (!filePath.startsWith(allowedBase) || !Files.exists(filePath) || !Files.isReadable(filePath)) {
+                return ResponseEntity.notFound().build();
+            }
+
+            Resource resource = new UrlResource(filePath.toUri());
+            String contentType = Files.probeContentType(filePath);
+            if (contentType == null) {
+                contentType = MediaType.APPLICATION_OCTET_STREAM_VALUE;
+            }
+
+            return ResponseEntity.ok()
+                    .contentType(MediaType.parseMediaType(contentType))
+                    .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + filePath.getFileName().toString() + "\"")
+                    .body(resource);
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().build();
+        }
     }
 }

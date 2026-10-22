@@ -31,11 +31,21 @@ public class SavePurchaseInvoiceRequest {
 
     private String sourceFileUrl;
 
+    private Boolean updateExisting = false;
+
     @NotEmpty
     @Valid
     private List<SavePurchaseInvoiceItemRequest> items;
 
     public SavePurchaseInvoiceRequest() {
+    }
+
+    public Boolean getUpdateExisting() {
+        return updateExisting;
+    }
+
+    public void setUpdateExisting(Boolean updateExisting) {
+        this.updateExisting = updateExisting;
     }
 
     public String getInvoiceNumber() {

@@ -34,3 +34,14 @@ build/
 
 .env
 **/.env
+
+**/uploads/
+uploads/
+
+*.jpeg
+*.jpg
+*.png
+*.webp
+
+**/src/main/resources/test/
+**/src/test/resources/

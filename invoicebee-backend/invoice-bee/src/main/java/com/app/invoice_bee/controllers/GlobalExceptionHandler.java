@@ -27,6 +27,20 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
     }
 
+    @ExceptionHandler(com.app.invoice_bee.exceptions.DuplicateInvoiceException.class)
+    public ResponseEntity<Map<String, Object>> handleDuplicateInvoiceException(com.app.invoice_bee.exceptions.DuplicateInvoiceException ex) {
+        Map<String, Object> error = new HashMap<>();
+        error.put("conflict", true);
+        error.put("duplicateInvoice", true);
+        error.put("message", ex.getMessage());
+        error.put("existingInvoiceId", ex.getExistingInvoiceId());
+        error.put("invoiceNumber", ex.getInvoiceNumber());
+        error.put("supplierName", ex.getSupplierName());
+        error.put("invoiceDate", ex.getInvoiceDate());
+        error.put("totalAmount", ex.getTotalAmount());
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
+    }
+
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<Map<String, String>> handleIllegalArgumentException(IllegalArgumentException ex) {
         Map<String, String> error = new HashMap<>();

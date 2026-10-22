@@ -14,7 +14,6 @@ public class InvoiceBeeApplication {
 		}
 		dotenv.entries().forEach(entry -> {
 			if (System.getProperty(entry.getKey()) == null) {
-				System.out.println(entry.getKey() + "=" + entry.getValue());
 				System.setProperty(entry.getKey(), entry.getValue());
 			}
 		});

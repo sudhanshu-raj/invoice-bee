@@ -5,6 +5,7 @@ import com.app.invoice_bee.dtos.ProductMatchDto;
 import com.app.invoice_bee.dtos.PurchaseInvoiceDto;
 import com.app.invoice_bee.dtos.SavePurchaseInvoiceItemRequest;
 import com.app.invoice_bee.dtos.SavePurchaseInvoiceRequest;
+import com.app.invoice_bee.exceptions.DuplicateInvoiceException;
 import com.app.invoice_bee.entities.IdentifierType;
 import com.app.invoice_bee.entities.Inventory;
 import com.app.invoice_bee.entities.InvoiceData;
@@ -162,20 +163,77 @@ public class InvoiceService {
         }
 
         Supplier supplier = resolveSupplier(shop, request);
+        String invNum = request.getInvoiceNumber() != null ? request.getInvoiceNumber().trim() : "INV-" + System.currentTimeMillis();
 
-        PurchaseInvoice invoice = new PurchaseInvoice();
-        invoice.setShop(shop);
-        invoice.setSupplier(supplier);
-        invoice.setInvoiceNumber(request.getInvoiceNumber() != null ? request.getInvoiceNumber().trim() : "INV-" + System.currentTimeMillis());
-        invoice.setPaymentMode(parsePaymentMode(request.getPaymentMode()));
-        invoice.setInvoiceDate(parseDate(request.getInvoiceDate()));
-        invoice.setStatus(InvoiceStatus.POSTED);
-        invoice.setSourceFileUrl(request.getSourceFileUrl());
-        invoice.setSubtotal(request.getSubtotal() != null ? request.getSubtotal() : BigDecimal.ZERO);
-        invoice.setTaxAmount(request.getTaxAmount() != null ? request.getTaxAmount() : BigDecimal.ZERO);
-        invoice.setTotalAmount(request.getTotalAmount() != null ? request.getTotalAmount() : BigDecimal.ZERO);
-        invoice.setCreatedAt(OffsetDateTime.now());
-        invoice.setPostedAt(OffsetDateTime.now());
+        Optional<PurchaseInvoice> existingOpt = supplier != null
+                ? purchaseInvoiceRepository.findByShopIdAndSupplierIdAndInvoiceNumber(shop.getId(), supplier.getId(), invNum)
+                : Optional.empty();
+
+        if (existingOpt.isPresent()) {
+            PurchaseInvoice existing = existingOpt.get();
+            if (!Boolean.TRUE.equals(request.getUpdateExisting())) {
+                throw new DuplicateInvoiceException(
+                        existing.getId(),
+                        existing.getInvoiceNumber(),
+                        supplier != null ? supplier.getName() : "Unknown",
+                        existing.getInvoiceDate(),
+                        existing.getTotalAmount()
+                );
+            }
+        }
+
+        PurchaseInvoice invoice;
+        if (existingOpt.isPresent()) {
+            invoice = existingOpt.get();
+            List<PurchaseInvoiceItem> oldItems = purchaseInvoiceItemRepository.findByInvoiceId(invoice.getId());
+            for (PurchaseInvoiceItem oldItem : oldItems) {
+                if (oldItem.getProduct() != null) {
+                    inventoryRepository.findByProductId(oldItem.getProduct().getId()).ifPresent(inv -> {
+                        BigDecimal currQty = inv.getQuantityOnHand() != null ? inv.getQuantityOnHand() : BigDecimal.ZERO;
+                        BigDecimal revertedQty = currQty.subtract(oldItem.getQuantity());
+                        if (revertedQty.compareTo(BigDecimal.ZERO) < 0) {
+                            revertedQty = BigDecimal.ZERO;
+                        }
+                        inv.setQuantityOnHand(revertedQty);
+                        inv.setUpdatedAt(OffsetDateTime.now());
+                        inventoryRepository.save(inv);
+                    });
+                }
+            }
+
+            if (!oldItems.isEmpty()) {
+                List<UUID> oldItemIds = oldItems.stream().map(PurchaseInvoiceItem::getId).toList();
+                productCostHistoryRepository.deleteByInvoiceItemIds(oldItemIds);
+            }
+
+            stockMovementRepository.deleteByInvoiceId(invoice.getId());
+            purchaseInvoiceItemRepository.deleteByInvoiceId(invoice.getId());
+
+            invoice.setPaymentMode(parsePaymentMode(request.getPaymentMode()));
+            invoice.setInvoiceDate(parseDate(request.getInvoiceDate()));
+            invoice.setStatus(InvoiceStatus.POSTED);
+            if (request.getSourceFileUrl() != null && !request.getSourceFileUrl().isBlank()) {
+                invoice.setSourceFileUrl(request.getSourceFileUrl());
+            }
+            invoice.setSubtotal(request.getSubtotal() != null ? request.getSubtotal() : BigDecimal.ZERO);
+            invoice.setTaxAmount(request.getTaxAmount() != null ? request.getTaxAmount() : BigDecimal.ZERO);
+            invoice.setTotalAmount(request.getTotalAmount() != null ? request.getTotalAmount() : BigDecimal.ZERO);
+            invoice.setPostedAt(OffsetDateTime.now());
+        } else {
+            invoice = new PurchaseInvoice();
+            invoice.setShop(shop);
+            invoice.setSupplier(supplier);
+            invoice.setInvoiceNumber(invNum);
+            invoice.setPaymentMode(parsePaymentMode(request.getPaymentMode()));
+            invoice.setInvoiceDate(parseDate(request.getInvoiceDate()));
+            invoice.setStatus(InvoiceStatus.POSTED);
+            invoice.setSourceFileUrl(request.getSourceFileUrl());
+            invoice.setSubtotal(request.getSubtotal() != null ? request.getSubtotal() : BigDecimal.ZERO);
+            invoice.setTaxAmount(request.getTaxAmount() != null ? request.getTaxAmount() : BigDecimal.ZERO);
+            invoice.setTotalAmount(request.getTotalAmount() != null ? request.getTotalAmount() : BigDecimal.ZERO);
+            invoice.setCreatedAt(OffsetDateTime.now());
+            invoice.setPostedAt(OffsetDateTime.now());
+        }
 
         PurchaseInvoice savedInvoice = purchaseInvoiceRepository.save(invoice);
 
@@ -307,7 +365,8 @@ public class InvoiceService {
                 savedInvoice.getTotalAmount(),
                 savedInvoice.getStatus().name(),
                 request.getItems().size(),
-                savedInvoice.getCreatedAt()
+                savedInvoice.getCreatedAt(),
+                savedInvoice.getSourceFileUrl()
         );
     }
 

@@ -19,6 +19,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.userdetails.UserDetails;
+import com.app.invoice_bee.services.ProductService;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -45,6 +47,7 @@ public class ProductController {
     private final ProductIdentifierRepository productIdentifierRepository;
     private final ProductPitchRepository productPitchRepository;
     private final UserRepository userRepository;
+    private final ProductService productService;
 
     public ProductController(
             ProductRepository productRepository,
@@ -52,7 +55,8 @@ public class ProductController {
             InventoryRepository inventoryRepository,
             ProductIdentifierRepository productIdentifierRepository,
             ProductPitchRepository productPitchRepository,
-            UserRepository userRepository
+            UserRepository userRepository,
+            ProductService productService
     ) {
         this.productRepository = productRepository;
         this.productPriceRepository = productPriceRepository;
@@ -60,6 +64,7 @@ public class ProductController {
         this.productIdentifierRepository = productIdentifierRepository;
         this.productPitchRepository = productPitchRepository;
         this.userRepository = userRepository;
+        this.productService = productService;
     }
 
     @GetMapping
@@ -216,6 +221,46 @@ public class ProductController {
         }
 
         return ResponseEntity.status(HttpStatus.CREATED).body(mapToDetailDto(savedProduct));
+    }
+
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Map<String, Object>> deleteProduct(
+            @PathVariable("id") UUID id,
+            @AuthenticationPrincipal UserDetails userDetails
+    ) {
+        User user = userRepository.findByEmail(userDetails.getUsername())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
+        Shop shop = user.getShop();
+        if (shop == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Shop required");
+        }
+
+        int deleted = productService.deleteProducts(List.of(id), shop.getId());
+        if (deleted == 0) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found or already deleted");
+        }
+        return ResponseEntity.ok(Map.of("deleted", deleted, "id", id));
+    }
+
+    @PostMapping("/batch-delete")
+    public ResponseEntity<Map<String, Object>> batchDeleteProducts(
+            @RequestBody Map<String, List<UUID>> request,
+            @AuthenticationPrincipal UserDetails userDetails
+    ) {
+        User user = userRepository.findByEmail(userDetails.getUsername())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
+        Shop shop = user.getShop();
+        if (shop == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Shop required");
+        }
+
+        List<UUID> productIds = request.get("productIds");
+        if (productIds == null || productIds.isEmpty()) {
+            return ResponseEntity.ok(Map.of("deleted", 0));
+        }
+
+        int deleted = productService.deleteProducts(productIds, shop.getId());
+        return ResponseEntity.ok(Map.of("deleted", deleted));
     }
 
     private ProductDetailDto mapToDetailDto(Product product) {

@@ -12,6 +12,14 @@ import org.springframework.util.MimeType;
 import org.springframework.util.MimeTypeUtils;
 import org.springframework.web.multipart.MultipartFile;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.MediaType;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.util.MultiValueMap;
+import org.springframework.web.client.RestClient;
+
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
@@ -22,9 +30,21 @@ public class InvoiceParserService {
     private static final Logger log = LoggerFactory.getLogger(InvoiceParserService.class);
 
     private final ChatClient chatClient;
+    private final ChatClient geminiChatClient;
+    private final RestClient restClient;
+    private final String ocrServiceUrl;
+    private final ImageResizeService imageResizeService;
 
-    public InvoiceParserService(ChatClient.Builder chatClientBuilder) {
-        this.chatClient = chatClientBuilder.build();
+    public InvoiceParserService(
+            @Qualifier("ollamaChatClient") ChatClient chatClient,
+            @Qualifier("geminiChatClient") ChatClient geminiChatClient,
+            @Value("${ocr.service.url:http://127.0.0.1:8000/api/v1/ocr}") String ocrServiceUrl
+    ) {
+        this.chatClient = chatClient;
+        this.geminiChatClient = geminiChatClient;
+        this.ocrServiceUrl = ocrServiceUrl;
+        this.restClient = RestClient.builder().build();
+        this.imageResizeService = new ImageResizeService();
     }
 
     private static final String PARSER_PROMPT = """
@@ -42,8 +62,121 @@ public class InvoiceParserService {
         8. FINAL INVOICE AMOUNT (totalAmount / grandTotal): Extract the exact final grand total / net payable amount printed at the bottom of the bill (labeled as 'Total Amount', 'Invoice Total', 'Grand Total', 'Net Payable', or 'Total'). Take it DIRECTLY from the printed bill text with ZERO external calculations, modifications, or recalculations. Set both totalAmount and grandTotal to this exact printed amount.
         9. Set a confidenceScore between 0.0 and 1.0 for each item.
         """;
+    
+    
+    private static final String PARSER_PROMPT2 = """
+            You are an expert Indian GST Invoice parser and reconstruction engine.
+            Below is raw, noisy OCR text extracted from a Tax Invoice. Because of how OCR scans top-to-bottom, multi-line product names and multi-column sections are interleaved on the same horizontal lines using "|" pipes.
+            
+            Follow these strict rules to reconstruct the invoice into clean, human-readable Markdown:
+            
+            1. HEADER & METADATA (2-Column Split):
+               - The top section mixes Seller Details (left side) with Invoice Metadata (right side: Invoice No., Date, Place of Supply) separated by "|". Untangle them into two distinct sections: "Seller Details" and "Invoice Details".
+               - Fix obvious OCR character typos in labels and IDs (e.g., "kmaił" -> "Email", "Bhar" -> "Bihar", and ensure 15-character GSTINs use valid digits/letters like "10" for Bihar state code instead of "TO").
+            
+            2. LINE ITEMS TABLE (Multi-Line Wrapping Fix):
+               - Table columns are: Sr. No. | Item Name | HSN/SAC | Quantity | Unit | Price/Unit | GST | Amount.
+               - CRITICAL: Item names often wrap across 2 or 3 lines (above and below the Sr. No. row). Words like "BTY", "FNSD BTY", "(48TT200)", "(2060TT)", and "PRO" belong to the Item Name of that row.
+               - If a line has two fragments separated by "|" before the next row number (e.g., "FNSD BTY | AMAZE 12V150AH..."), the first fragment ("FNSD BTY") is the bottom wrap of the PREVIOUS item, and the second fragment ("AMAZE 12V150AH...") is the top wrap of the NEXT item. Merge them into their respective item names!
+               - If a row is missing the "Unit" column (e.g., jumping straight from Quantity "2" to Price "13,097.87"), infer the unit from adjacent identical HSN items (e.g., "Nos").
+               - If there is two or more row for Price/Rate for each row, pick the one which has included tax in it or price with the tax added in it.
+            
+            3. TOTALS & SUMMARY:
+               - Untangle the left side ("Invoice Amount in Words", "Payment mode") from the right side ("Sub Total", "Round off", "Total", "Received", "Balance").
+            
+            4. HSN/SAC TAX BREAKDOWN TABLE:
+               - Reconstruct the GST tax table with columns: HSN/SAC | Taxable Amount | CGST Rate | CGST Amount | SGST Rate | SGST Amount | Total Tax Amount.
+            
+            5. FOOTER:
+               - Untangle the 3 columns at the bottom: "Bank Details" (left), "Terms and Conditions" (middle), and "Signatory" (right). Ignore stray QR-code text like "AN TO PAY" (SCAN TO PAY).
+            
+            Output ONLY the reconstructed Markdown invoice. Do not include explanations.
+            
+            ---
+            RAW OCR TEXT:
+            {paste_rawText_here}
+            """;
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record OcrLine(
+            String text,
+            Double confidence,
+            List<List<Integer>> box
+    ) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record OcrResponse(
+            String status,
+            Integer count,
+            String rawText,
+            List<OcrLine> lines
+    ) {}
+
+    public OcrResponse extractOcrResponse(MultipartFile file) {
+        if (file == null || file.isEmpty()) {
+            throw new IllegalArgumentException("Invoice file is empty or null");
+        }
+        try {
+            byte[] fileBytes;
+            try {
+                fileBytes = imageResizeService.resizeImage(file);
+            } catch (Exception resizeEx) {
+                log.warn("Image resizing failed, proceeding with original file bytes: {}", resizeEx.getMessage());
+                fileBytes = file.getBytes();
+            }
+
+            Resource fileResource = new ByteArrayResource(fileBytes) {
+                @Override
+                public String getFilename() {
+                    return file.getOriginalFilename() != null ? file.getOriginalFilename() : "invoice.png";
+                }
+            };
+
+            MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
+            body.add("file", fileResource);
+
+            OcrResponse response = restClient.post()
+                    .uri(ocrServiceUrl)
+                    .contentType(MediaType.MULTIPART_FORM_DATA)
+                    .body(body)
+                    .retrieve()
+                    .body(OcrResponse.class);
+
+            if (response == null) {
+                throw new IllegalStateException("OCR service response was null");
+            }
+            return response;
+        } catch (Exception ex) {
+            log.error("OCR extraction failed: ", ex);
+            throw new RuntimeException("Failed to extract OCR response: " + ex.getMessage(), ex);
+        }
+    }
+
+    public String extractOcrText(MultipartFile file) {
+        OcrResponse response = extractOcrResponse(file);
+        if (response.rawText() != null && !response.rawText().isBlank()) {
+            return response.toString();
+        }
+        throw new IllegalStateException("OCR service response did not contain rawText");
+    }
+
+    public InvoiceData parseUploadedInvoiceWithOcrAndGemini(MultipartFile file) {
+        try {
+            if (file != null && !file.isEmpty()) {
+                String ocrRawText = extractOcrText(file);
+                return parseOcrTextToInvoiceWithGemini(ocrRawText);
+            }
+        } catch (Exception ex) {
+            log.warn("OCR and Gemini invoice extraction failed: {}. Falling back to default invoice data.", ex.getMessage(), ex);
+        }
+        return createFallbackInvoiceData();
+    }
 
     public InvoiceData parseUploadedInvoice(MultipartFile file) {
+        return parseUploadedInvoiceWithOcrAndGemini(file);
+    }
+
+    public InvoiceData parseUploadedInvoiceWithOllama(MultipartFile file) {
         try {
             if (file != null && !file.isEmpty()) {
                 Resource resource = new ByteArrayResource(file.getBytes()) {
@@ -72,7 +205,6 @@ public class InvoiceParserService {
                         })
                         .call()
                         .entity(InvoiceData.class);
-                System.out.println(response);
                 return response;
             }
         } catch (Exception ex) {
@@ -85,7 +217,7 @@ public class InvoiceParserService {
     public InvoiceData parseOcrTextToInvoice(String rawTextOrName) {
         try {
             return chatClient.prompt()
-                    .system(PARSER_PROMPT)
+                    .system(PARSER_PROMPT2)
                     .user(rawTextOrName)
                     .call()
                     .entity(InvoiceData.class);
@@ -93,6 +225,26 @@ public class InvoiceParserService {
             log.warn("OCR text AI extraction failed: {}. Using fallback invoice data.", ex.getMessage());
             return createFallbackInvoiceData();
         }
+    }
+
+    public InvoiceData parseOcrTextToInvoiceWithGemini(String rawTextOrName) {
+        try {
+            return geminiChatClient.prompt()
+                    .system(PARSER_PROMPT2)
+                    .user(rawTextOrName)
+                    .call()
+                    .entity(InvoiceData.class);
+        } catch (Exception ex) {
+            log.error("Gemini OCR text AI extraction failed: ", ex);
+            return createFallbackInvoiceData();
+        }
+    }
+
+    public InvoiceData parseOcrTextToInvoice(String rawTextOrName, boolean useGemini) {
+        if (useGemini) {
+            return parseOcrTextToInvoiceWithGemini(rawTextOrName);
+        }
+        return parseOcrTextToInvoice(rawTextOrName);
     }
 
     public InvoiceData createFallbackInvoiceData() {

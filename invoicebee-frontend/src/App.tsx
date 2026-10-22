@@ -1,18 +1,20 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { User, getToken, getStoredUser, signup, signin, fetchCurrentUser, logout, createShop, updateShop, fetchCurrentShop, createTeamUser, fetchTeamUsers } from "./services/auth";
-import { scanInvoiceFile, savePurchaseInvoice, ProductMatchDto, SavePurchaseInvoicePayload, PurchaseInvoiceDto, fetchPurchaseInvoices } from "./services/invoice";
-import { ProductDetail, fetchShopProducts, createProduct } from "./services/product";
+import { scanInvoiceFile, savePurchaseInvoice, ProductMatchDto, SavePurchaseInvoicePayload, PurchaseInvoiceDto, fetchPurchaseInvoices, fetchPurchaseInvoiceById, fetchInvoiceFileBlob, PurchaseInvoiceDetailDto, DuplicateInvoiceError, DuplicateInvoiceConflictDetails } from "./services/invoice";
+import { ProductDetail, fetchShopProducts, createProduct, deleteProduct, deleteProductsBatch } from "./services/product";
 import { SupplierSummary, fetchSuppliers, createSupplier } from "./services/supplier";
 import { enrichProductWeb, ProductWebIntelligence } from "./services/intelligence";
 import { QrCodeModal } from "./components/QrCodeModal";
 import { QrScannerModal } from "./components/QrScannerModal";
 import { ProductPriceModal } from "./components/ProductPriceModal";
+import { BarcodePrintModal, PrintQueueItem } from "./components/BarcodePrintModal";
+import { InvoiceScanningOverlay } from "./components/InvoiceScanningOverlay";
 
 type IconName =
   | "grid" | "box" | "tag" | "scan" | "cart" | "sale" | "users" | "spark"
   | "archive" | "refresh" | "chat" | "report" | "settings" | "search"
   | "bell" | "chevron" | "arrow" | "trend" | "warning" | "check" | "plus"
-  | "upload" | "filter" | "more" | "close" | "edit" | "file" | "send" | "menu";
+  | "upload" | "filter" | "more" | "close" | "edit" | "file" | "send" | "menu" | "trash";
 
 const iconPaths: Record<IconName, string> = {
   grid: "M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z",
@@ -44,6 +46,7 @@ const iconPaths: Record<IconName, string> = {
   file: "M14 2H6a2 2 0 0 0-2 2v16h16V8zM14 2v6h6",
   send: "m22 2-7 20-4-9-9-4 20-7ZM11 13 22 2",
   menu: "M4 6h16M4 12h16M4 18h16",
+  trash: "M3 6h18m-2 0v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6m3 0V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2m-6 5v6m4-6v6",
 };
 
 function Icon({ name, size = 18, className = "" }: { name: IconName; size?: number; className?: string }) {
@@ -74,33 +77,23 @@ function Badge({ children, tone = "neutral" }: { children: React.ReactNode; tone
 }
 
 function Card({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return <section className={`rounded-xl border border-slate-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.03)] ${className}`}>{children}</section>;
+  return <section className={`rounded-xl border border-slate-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.03)] overflow-hidden min-w-0 ${className}`}>{children}</section>;
 }
 
 function PageHeader({ title, description, actions }: { title: string; description: string; actions?: React.ReactNode }) {
-  return <div className="mb-5 flex flex-col justify-between gap-3 sm:flex-row sm:items-end"><div><h1 className="text-2xl font-bold tracking-tight text-slate-900">{title}</h1><p className="mt-1 text-sm text-slate-500">{description}</p></div>{actions && <div className="flex items-center gap-2">{actions}</div>}</div>;
+  return <div className="mb-5 flex flex-col justify-between gap-3 sm:flex-row sm:items-end"><div><h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">{title}</h1><p className="mt-1 text-xs sm:text-sm text-slate-500">{description}</p></div>{actions && <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">{actions}</div>}</div>;
 }
 
 const nav = [
   ["Overview", "grid"],
   ["Products", "tag"],
   ["Invoice Scanner", "scan"],
-  ["Purchases", "cart"],
+  ["Invoices", "file"],
   ["Suppliers", "users"],
   ["AI Assistant", "chat"],
   ["Reports", "report"],
   ["Settings", "settings"],
 ] as [string, IconName][];
-
-const products = [
-  { name: "Aashirvaad Atta 5 kg", sku: "GRO-1024", category: "Grocery", stock: 18, cost: 238, price: 285, margin: 16.5, status: "Low stock" },
-  { name: "Fortune Sunflower Oil 1L", sku: "GRO-1048", category: "Grocery", stock: 42, cost: 112, price: 139, margin: 19.4, status: "In stock" },
-  { name: "Tata Salt 1 kg", sku: "GRO-1012", category: "Grocery", stock: 86, cost: 24, price: 30, margin: 20, status: "In stock" },
-  { name: "Surf Excel Easy Wash 1 kg", sku: "HOM-2041", category: "Home care", stock: 9, cost: 124, price: 158, margin: 21.5, status: "Low stock" },
-  { name: "Britannia Good Day 600 g", sku: "SNK-3021", category: "Snacks", stock: 0, cost: 92, price: 120, margin: 23.3, status: "Out of stock" },
-  { name: "Dove Bathing Bar 3×125 g", sku: "PER-4018", category: "Personal care", stock: 34, cost: 168, price: 205, margin: 18, status: "In stock" },
-  { name: "Maggi 2-Minute Noodles 560 g", sku: "SNK-3092", category: "Snacks", stock: 67, cost: 91, price: 112, margin: 18.8, status: "In stock" },
-];
 
 const currency = (value: number) => new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(value);
 
@@ -131,23 +124,34 @@ function Sidebar({ active, onNavigate, open, onClose, onLogout, user }: { active
   </aside>;
 }
 
-function Header({ onMenu, onNavigate, sidebarOpen, onScanQr }: { onMenu: () => void; onNavigate: (n: string) => void; sidebarOpen?: boolean; onScanQr?: () => void }) {
-  return <header className="sticky top-0 z-30 flex h-16 items-center border-b border-slate-200 bg-white/95 px-4 backdrop-blur sm:px-6">
-    <Button className="mr-2" variant="ghost" onClick={onMenu} title={sidebarOpen ? "Hide menu" : "Show menu"}><Icon name="menu" /></Button>
+function Header({ onMenu, onNavigate, sidebarOpen, onScanQr, printQueueCount = 0, onOpenPrintModal }: { onMenu: () => void; onNavigate: (n: string) => void; sidebarOpen?: boolean; onScanQr?: () => void; printQueueCount?: number; onOpenPrintModal?: () => void }) {
+  return <header className="sticky top-0 z-30 flex h-16 w-full max-w-full items-center border-b border-slate-200 bg-white/95 px-2.5 sm:px-6 backdrop-blur overflow-hidden">
+    <Button className="mr-1 sm:mr-2 px-2 sm:px-2.5 shrink-0" variant="ghost" onClick={onMenu} title={sidebarOpen ? "Hide menu" : "Show menu"}><Icon name="menu" /></Button>
     <div className="relative hidden w-full max-w-md md:block"><Icon className="absolute left-3 top-2.5 text-slate-400" name="search" size={17} /><Input className="bg-slate-50 pl-9" placeholder="Search products, suppliers, invoices…" /></div>
-    <div className="ml-auto flex items-center gap-2">
-      <Button variant="secondary" onClick={onScanQr} title="Scan QR to lookup product pricing">
+    <div className="ml-auto flex items-center gap-1 sm:gap-2 shrink-0">
+      {onOpenPrintModal && (
+        <Button variant="secondary" className="px-2 sm:px-3 text-xs sm:text-sm shrink-0" onClick={onOpenPrintModal} title="Open A4 Barcode Print Sheet">
+          <Icon name="file" size={16} />
+          <span className="hidden sm:inline">Print Sheet</span>
+          {printQueueCount > 0 && (
+            <span className="rounded-full bg-emerald-600 px-1.5 py-0.2 text-[10px] font-bold text-white">
+              {printQueueCount}
+            </span>
+          )}
+        </Button>
+      )}
+      <Button variant="secondary" className="px-2 sm:px-3.5 text-xs sm:text-sm shrink-0" onClick={onScanQr} title="Scan barcode to lookup product pricing">
         <Icon name="scan" size={16} />
-        <span className="hidden sm:inline">Scan QR (Prices)</span>
+        <span className="hidden sm:inline">Scan Barcode</span>
       </Button>
-      <Button variant="secondary" onClick={() => onNavigate("Invoice Scanner")}><Icon name="upload" size={16} /><span className="hidden sm:inline">Scan invoice</span></Button>
-      <button className="relative grid size-9 place-items-center rounded-lg text-slate-500 hover:bg-slate-100"><Icon name="bell" /><span className="absolute right-2 top-2 size-1.5 rounded-full bg-rose-500 ring-2 ring-white" /></button>
+      <Button variant="secondary" className="px-2 sm:px-3.5 text-xs sm:text-sm shrink-0" onClick={() => onNavigate("Invoice Scanner")}><Icon name="upload" size={16} /><span className="hidden sm:inline">Scan invoice</span></Button>
+      <button className="relative grid size-9 place-items-center rounded-lg text-slate-500 hover:bg-slate-100 shrink-0"><Icon name="bell" /><span className="absolute right-2 top-2 size-1.5 rounded-full bg-rose-500 ring-2 ring-white" /></button>
     </div>
   </header>;
 }
 
-function MetricCard({ title, value, meta, icon, tone = "emerald" }: { title: string; value: string; meta: string; icon: IconName; tone?: "emerald" | "amber" | "blue" | "violet" }) {
-  const tones = { emerald: "bg-emerald-50 text-emerald-700", amber: "bg-amber-50 text-amber-700", blue: "bg-blue-50 text-blue-700", violet: "bg-violet-50 text-violet-700" };
+function MetricCard({ title, value, meta, icon, tone = "emerald" }: { title: string; value: string; meta: string; icon: IconName; tone?: "emerald" | "amber" | "blue" | "violet" | "rose" }) {
+  const tones = { emerald: "bg-emerald-50 text-emerald-700", amber: "bg-amber-50 text-amber-700", blue: "bg-blue-50 text-blue-700", violet: "bg-violet-50 text-violet-700", rose: "bg-rose-50 text-rose-700" };
   return <Card className="p-4"><div className="flex items-start justify-between"><p className="text-sm font-medium text-slate-500">{title}</p><span className={`grid size-8 place-items-center rounded-lg ${tones[tone]}`}><Icon name={icon} size={16} /></span></div><p className="mt-3 text-2xl font-bold tracking-tight text-slate-900">{value}</p><p className="mt-1 text-xs text-slate-500">{meta}</p></Card>;
 }
 
@@ -324,46 +328,403 @@ function ShopSetupView({ user, onShopCreated }: { user?: User | null; onShopCrea
 }
 
 function Overview({ onNavigate, user, onShopCreated, onShowQr }: { onNavigate: (n: string) => void; user?: User | null; onShopCreated: (user: User) => void; onShowQr?: (p: any) => void }) {
+  const [productsList, setProductsList] = useState<ProductDetail[]>([]);
+  const [invoicesList, setInvoicesList] = useState<PurchaseInvoiceDto[]>([]);
+  const [suppliersList, setSuppliersList] = useState<SupplierSummary[]>([]);
+  const [period, setPeriod] = useState("30");
+
+  const loadOverviewData = useCallback(() => {
+    Promise.all([
+      fetchShopProducts().catch(() => []),
+      fetchPurchaseInvoices().catch(() => []),
+      fetchSuppliers().catch(() => []),
+    ]).then(([prods, invs, supps]) => {
+      setProductsList(prods);
+      setInvoicesList(invs);
+      setSuppliersList(supps);
+    });
+  }, []);
+
+  useEffect(() => {
+    loadOverviewData();
+  }, [loadOverviewData, user?.shopId]);
+
+  const filteredInvoices = useMemo(() => {
+    if (period === "all") return invoicesList;
+    const days = parseInt(period, 10) || 30;
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    return invoicesList.filter(inv => {
+      const d = inv.invoiceDate || inv.createdAt;
+      if (!d) return true;
+      const parsed = new Date(d);
+      return isNaN(parsed.getTime()) || parsed >= cutoff;
+    });
+  }, [invoicesList, period]);
+
+  const inventoryValue = useMemo(() => {
+    return productsList.reduce((acc, p) => {
+      const cost = Number(p.buyingPrice ?? p.lastPurchaseCost ?? 0) || Number(p.sellingPrice ?? 0);
+      return acc + (Number(p.stock ?? 0) * cost);
+    }, 0);
+  }, [productsList]);
+
+  const totalStockUnits = useMemo(() => {
+    return productsList.reduce((acc, p) => acc + Number(p.stock ?? 0), 0);
+  }, [productsList]);
+
+  const lowStockProducts = useMemo(() => {
+    return productsList.filter(p => Number(p.stock ?? 0) > 0 && Number(p.stock ?? 0) < 10);
+  }, [productsList]);
+
+  const outOfStockProducts = useMemo(() => {
+    return productsList.filter(p => Number(p.stock ?? 0) === 0);
+  }, [productsList]);
+
+  const unpricedProducts = useMemo(() => {
+    return productsList.filter(p => !p.sellingPrice || Number(p.sellingPrice) <= 0);
+  }, [productsList]);
+
+  const estimatedMargin = useMemo(() => {
+    const priced = productsList.filter(p => Number(p.sellingPrice ?? 0) > 0);
+    if (!priced.length) return 0;
+    const totalMargin = priced.reduce((acc, p) => {
+      const price = Number(p.sellingPrice ?? 0);
+      const cost = Number(p.buyingPrice ?? p.lastPurchaseCost ?? 0);
+      const margin = price > 0 ? ((price - cost) / price) * 100 : 0;
+      return acc + margin;
+    }, 0);
+    return Math.round((totalMargin / priced.length) * 10) / 10;
+  }, [productsList]);
+
+  const totalPurchaseSpend = useMemo(() => {
+    return filteredInvoices.reduce((acc, inv) => acc + Number(inv.totalAmount ?? 0), 0);
+  }, [filteredInvoices]);
+
+  const topProducts = useMemo(() => {
+    return productsList.slice().sort((a, b) => {
+      const valA = Number(a.stock ?? 0) * (Number(a.buyingPrice ?? a.lastPurchaseCost ?? 0) || Number(a.sellingPrice ?? 0));
+      const valB = Number(b.stock ?? 0) * (Number(b.buyingPrice ?? b.lastPurchaseCost ?? 0) || Number(b.sellingPrice ?? 0));
+      return valB - valA;
+    }).slice(0, 5);
+  }, [productsList]);
+
+  const categoryBreakdown = useMemo(() => {
+    const map = new Map<string, { count: number; value: number }>();
+    productsList.forEach(p => {
+      const cat = p.category?.trim() || "General";
+      const val = Number(p.stock ?? 0) * (Number(p.buyingPrice ?? p.lastPurchaseCost ?? 0) || Number(p.sellingPrice ?? 0));
+      const cur = map.get(cat) || { count: 0, value: 0 };
+      map.set(cat, { count: cur.count + 1, value: cur.value + val });
+    });
+    const totalVal = Array.from(map.values()).reduce((acc, c) => acc + c.value, 0) || 1;
+    const colors = ["#059669", "#0d9488", "#0284c7", "#d97706", "#7c3aed", "#e11d48", "#64748b"];
+    const entries = Array.from(map.entries())
+      .map(([name, data]) => ({
+        name,
+        count: data.count,
+        value: data.value,
+        pct: Math.round((data.value / totalVal) * 100) || Math.round((data.count / (productsList.length || 1)) * 100),
+      }))
+      .sort((a, b) => b.value - a.value);
+
+    let currentAngle = 0;
+    const gradientStops = entries.map((entry, idx) => {
+      const color = colors[idx % colors.length];
+      const start = currentAngle;
+      const end = currentAngle + entry.pct;
+      currentAngle = end;
+      return `${color} ${start}% ${end}%`;
+    });
+
+    const conic = gradientStops.length > 0 ? `conic-gradient(${gradientStops.join(", ")})` : undefined;
+    return { entries, conic, totalVal };
+  }, [productsList]);
+
+  const monthlyTrend = useMemo(() => {
+    const months: { label: string; key: string; spend: number; count: number }[] = [];
+    const now = new Date();
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const label = d.toLocaleDateString("en-US", { month: "short" });
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      months.push({ label, key, spend: 0, count: 0 });
+    }
+
+    invoicesList.forEach(inv => {
+      const rawDate = inv.invoiceDate || inv.createdAt;
+      if (!rawDate) return;
+      const dateObj = new Date(rawDate);
+      if (isNaN(dateObj.getTime())) return;
+      const k = `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, "0")}`;
+      const found = months.find(m => m.key === k);
+      if (found) {
+        found.spend += Number(inv.totalAmount ?? 0);
+        found.count += 1;
+      }
+    });
+
+    const maxSpend = Math.max(...months.map(m => m.spend), 1);
+    return months.map(m => ({
+      ...m,
+      pct: m.spend > 0 ? Math.max(12, Math.round((m.spend / maxSpend) * 100)) : 6,
+    }));
+  }, [invoicesList]);
+
+  const attentionItems = useMemo(() => {
+    const list: { icon: IconName; title: string; sub: string; target: string; tone: "amber" | "rose" | "blue" | "emerald" }[] = [];
+    if (outOfStockProducts.length > 0) {
+      list.push({
+        icon: "warning",
+        title: `${outOfStockProducts.length} items out of stock`,
+        sub: "Zero inventory on shelf. Restock immediately to prevent lost sales.",
+        target: "Products",
+        tone: "rose",
+      });
+    }
+    if (lowStockProducts.length > 0) {
+      list.push({
+        icon: "warning",
+        title: `${lowStockProducts.length} items low on stock`,
+        sub: "Current stock quantity is under 10 units. Create replenishment orders.",
+        target: "Products",
+        tone: "amber",
+      });
+    }
+    if (unpricedProducts.length > 0) {
+      list.push({
+        icon: "tag",
+        title: `${unpricedProducts.length} products missing selling prices`,
+        sub: "Set retail prices to generate barcodes and enable register checkout.",
+        target: "Products",
+        tone: "amber",
+      });
+    }
+    if (!invoicesList.length) {
+      list.push({
+        icon: "scan",
+        title: "Scan your first purchase invoice",
+        sub: "AI invoice scanner extracts items, prices, and taxes automatically.",
+        target: "Invoice Scanner",
+        tone: "blue",
+      });
+    } else {
+      list.push({
+        icon: "cart",
+        title: `${invoicesList.length} purchase invoices recorded`,
+        sub: `Total invoice spend of ${currency(totalPurchaseSpend)} tracked.`,
+        target: "Purchases",
+        tone: "blue",
+      });
+    }
+    if (suppliersList.length > 0) {
+      list.push({
+        icon: "users",
+        title: `${suppliersList.length} active suppliers registered`,
+        sub: "View purchase orders, payment statuses, and vendor contacts.",
+        target: "Suppliers",
+        tone: "emerald",
+      });
+    }
+    return list;
+  }, [outOfStockProducts, lowStockProducts, unpricedProducts, invoicesList, suppliersList, totalPurchaseSpend]);
+
   if (!user?.shopId) {
     return <ShopSetupView user={user} onShopCreated={onShopCreated} />;
   }
 
-  const chart = [42, 46, 44, 51, 48, 56, 58, 61, 59, 66, 68, 72];
   return <>
-    <PageHeader title={`Good morning, ${user?.fullName || "Partner"}`} description={`Here’s what needs your attention across ${user?.shopName || "your shop"}.`} actions={<><Select defaultValue="30"><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option></Select><Button><Icon name="plus" size={16} />Add product</Button></>} />
-    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-      <MetricCard title="Inventory value" value="₹12,48,620" meta="↑ 3.2% from last month" icon="box" />
-      <MetricCard title="Active products" value="1,248" meta="32 added this month" icon="tag" tone="blue" />
-      <MetricCard title="Low stock items" value="18" meta="6 need attention today" icon="warning" tone="amber" />
-      <MetricCard title="Estimated margin" value="22.4%" meta="↑ 1.8% from last month" icon="trend" tone="violet" />
+    <PageHeader
+      title={`Good morning, ${user?.fullName || "Partner"}`}
+      description={`Here's live operational intelligence for ${user?.shopName || "your shop"}.`}
+      actions={
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+          <Select value={period} onChange={e => setPeriod(e.target.value)}>
+            <option value="7">Last 7 days</option>
+            <option value="30">Last 30 days</option>
+            <option value="90">Last 90 days</option>
+          </Select>
+          <Button onClick={() => onNavigate("Products")}>
+            <Icon name="plus" size={16} />
+            <span>Add product</span>
+          </Button>
+        </div>
+      }
+    />
+
+    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 min-w-0">
+      <MetricCard
+        title="Inventory valuation"
+        value={currency(inventoryValue)}
+        meta={`${totalStockUnits} stock units across catalogue`}
+        icon="box"
+      />
+      <MetricCard
+        title="Active products"
+        value={String(productsList.length)}
+        meta={`${categoryBreakdown.entries.length} active product categories`}
+        icon="tag"
+        tone="blue"
+      />
+      <MetricCard
+        title="Low & out of stock"
+        value={String(lowStockProducts.length + outOfStockProducts.length)}
+        meta={`${outOfStockProducts.length} out of stock, ${lowStockProducts.length} low`}
+        icon="warning"
+        tone={outOfStockProducts.length > 0 ? "rose" : "amber"}
+      />
+      <MetricCard
+        title="Estimated margin"
+        value={`${estimatedMargin}%`}
+        meta={totalPurchaseSpend > 0 ? `Spend: ${currency(totalPurchaseSpend)}` : "Across priced catalog items"}
+        icon="trend"
+        tone="violet"
+      />
     </div>
-    <div className="mt-4 grid gap-4 xl:grid-cols-[1.55fr_1fr]">
-      <Card>
-        <div className="flex items-center justify-between border-b border-slate-100 p-5"><div><h2 className="font-bold text-slate-900">Stock value trend</h2><p className="mt-0.5 text-xs text-slate-500">Inventory value over the last 12 weeks</p></div><div className="text-right"><p className="text-lg font-bold text-slate-900">₹12.49L</p><p className="text-xs font-medium text-emerald-600">+8.6% overall</p></div></div>
-        <div className="p-5">
-          <div className="flex h-52 items-end gap-2 border-b border-slate-100">{chart.map((h, i) => <div className="group relative flex h-full flex-1 items-end" key={i}><div className="w-full rounded-t bg-emerald-100 transition hover:bg-emerald-400" style={{ height: `${h}%` }} /></div>)}</div>
-          <div className="mt-2 flex justify-between text-[11px] text-slate-400"><span>06 Jan</span><span>03 Feb</span><span>03 Mar</span><span>24 Mar</span></div>
+
+    <div className="mt-4 grid gap-4 xl:grid-cols-[1.55fr_1fr] min-w-0">
+      <Card className="min-w-0">
+        <div className="flex items-center justify-between border-b border-slate-100 p-4 sm:p-5">
+          <div>
+            <h2 className="font-bold text-slate-900">Purchase spend trend</h2>
+            <p className="mt-0.5 text-xs text-slate-500">Monthly invoice procurement volume</p>
+          </div>
+          <div className="text-right">
+            <p className="text-base sm:text-lg font-bold text-slate-900">{currency(totalPurchaseSpend)}</p>
+            <p className="text-xs font-medium text-emerald-600">{invoicesList.length} invoices recorded</p>
+          </div>
+        </div>
+        <div className="p-4 sm:p-5">
+          <div className="flex h-48 sm:h-52 items-end gap-2 border-b border-slate-100 pb-1">
+            {monthlyTrend.map((m) => (
+              <div className="group relative flex h-full flex-1 flex-col items-center justify-end" key={m.key}>
+                <div className="absolute -top-10 hidden flex-col items-center group-hover:flex z-10 pointer-events-none">
+                  <span className="whitespace-nowrap rounded bg-slate-800 px-2 py-1 text-[10px] font-semibold text-white shadow-md">
+                    {currency(m.spend)} ({m.count} inv)
+                  </span>
+                  <span className="border-4 border-transparent border-t-slate-800" />
+                </div>
+                <div
+                  className={`w-full rounded-t transition-all ${
+                    m.spend > 0 ? "bg-emerald-500 hover:bg-emerald-600" : "bg-slate-100"
+                  }`}
+                  style={{ height: `${m.pct}%` }}
+                />
+              </div>
+            ))}
+          </div>
+          <div className="mt-2.5 flex justify-between text-[11px] font-medium text-slate-500">
+            {monthlyTrend.map((m) => (
+              <span key={m.key} className="text-center flex-1">{m.label}</span>
+            ))}
+          </div>
         </div>
       </Card>
-      <Card>
-        <div className="flex items-center justify-between border-b border-slate-100 p-5"><div><h2 className="font-bold text-slate-900">Needs attention</h2><p className="mt-0.5 text-xs text-slate-500">Prioritized by business impact</p></div><Badge tone="warning">6 actions</Badge></div>
+
+      <Card className="min-w-0">
+        <div className="flex items-center justify-between border-b border-slate-100 p-4 sm:p-5">
+          <div>
+            <h2 className="font-bold text-slate-900">Needs attention</h2>
+            <p className="mt-0.5 text-xs text-slate-500">Prioritized by business impact</p>
+          </div>
+          <Badge tone={attentionItems.some(i => i.tone === "rose") ? "danger" : "warning"}>
+            {attentionItems.length} alerts
+          </Badge>
+        </div>
         <div className="divide-y divide-slate-100">
-          {[
-            ["warning", "Review product pricing & margins", "Keep your retail prices and margins up to date", "Products", "amber"],
-            ["cart", "Recent purchase invoices & suppliers", "Track bills and supplier invoice payment statuses", "Purchases", "blue"],
-            ["users", "Active supplier directory", "View spend history and supplier contacts", "Suppliers", "rose"]
-          ].map(([icon, title, sub, target, tone]) => <button className="flex w-full gap-3 p-4 text-left hover:bg-slate-50" key={title} onClick={() => onNavigate(target)}><span className={`mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg ${tone === "amber" ? "bg-amber-50 text-amber-700" : tone === "rose" ? "bg-rose-50 text-rose-700" : "bg-blue-50 text-blue-700"}`}><Icon name={icon as IconName} size={16} /></span><span className="min-w-0 flex-1"><span className="block text-sm font-semibold text-slate-800">{title}</span><span className="mt-0.5 block text-xs text-slate-500">{sub}</span></span><Icon className="mt-2 text-slate-400" name="arrow" size={15} /></button>)}
+          {attentionItems.map((item, idx) => (
+            <button
+              className="flex w-full items-start gap-3 p-3.5 sm:p-4 text-left hover:bg-slate-50 transition"
+              key={idx}
+              onClick={() => onNavigate(item.target)}
+            >
+              <span className={`mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg ${item.tone === "amber" ? "bg-amber-50 text-amber-700" : item.tone === "rose" ? "bg-rose-50 text-rose-700" : item.tone === "emerald" ? "bg-emerald-50 text-emerald-700" : "bg-blue-50 text-blue-700"}`}>
+                <Icon name={item.icon} size={16} />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-semibold text-slate-800 truncate">{item.title}</span>
+                <span className="mt-0.5 block text-xs text-slate-500">{item.sub}</span>
+              </span>
+              <Icon className="mt-1 text-slate-400 shrink-0" name="arrow" size={15} />
+            </button>
+          ))}
         </div>
       </Card>
     </div>
-    <div className="mt-4 grid gap-4 lg:grid-cols-3">
-      <Card className="lg:col-span-2"><div className="flex items-center justify-between border-b border-slate-100 p-5"><h2 className="font-bold text-slate-900">Top products by value</h2><Button variant="ghost" onClick={() => onNavigate("Products")}>View products <Icon name="arrow" size={15} /></Button></div><ProductTable compact onProduct={() => onNavigate("Products")} onShowQr={onShowQr} /></Card>
-      <Card className="p-5"><h2 className="font-bold text-slate-900">Purchase spend</h2><p className="text-xs text-slate-500">Overview</p><div className="mt-5 flex items-center gap-5"><div className="grid size-28 place-items-center rounded-full bg-[conic-gradient(#059669_0_42%,#0f766e_42%_70%,#f59e0b_70%_87%,#e2e8f0_87%)]"><div className="grid size-16 place-items-center rounded-full bg-white text-center"><span className="text-xs text-slate-500">Total</span><strong className="-mt-3 text-sm text-slate-900">₹3.2L</strong></div></div><div className="space-y-2 text-xs">{[["Grocery","42%","bg-emerald-600"],["Home care","28%","bg-teal-700"],["Personal care","17%","bg-amber-500"],["Other","13%","bg-slate-200"]].map(x=><div className="flex items-center gap-2" key={x[0]}><span className={`size-2 rounded-full ${x[2]}`} /><span className="w-20 text-slate-500">{x[0]}</span><strong>{x[1]}</strong></div>)}</div></div></Card>
+
+    <div className="mt-4 grid gap-4 lg:grid-cols-3 min-w-0">
+      <Card className="lg:col-span-2 min-w-0">
+        <div className="flex items-center justify-between border-b border-slate-100 p-4 sm:p-5">
+          <div>
+            <h2 className="font-bold text-slate-900">Top products by value</h2>
+            <p className="text-xs text-slate-500">Highest value inventory units in shop</p>
+          </div>
+          <Button variant="ghost" onClick={() => onNavigate("Products")}>
+            <span>View all</span>
+            <Icon name="arrow" size={15} />
+          </Button>
+        </div>
+        <ProductTable compact productsList={topProducts} onProduct={() => onNavigate("Products")} onShowQr={onShowQr} />
+      </Card>
+
+      <Card className="p-4 sm:p-5 min-w-0">
+        <h2 className="font-bold text-slate-900">Category breakdown</h2>
+        <p className="text-xs text-slate-500">Inventory share by product category</p>
+        <div className="mt-5 flex flex-col sm:flex-row items-center gap-5">
+          <div
+            className="grid size-28 shrink-0 place-items-center rounded-full shadow-inner"
+            style={{ background: categoryBreakdown.conic || "#059669" }}
+          >
+            <div className="grid size-16 place-items-center rounded-full bg-white text-center shadow-sm">
+              <span className="text-[10px] text-slate-400 uppercase font-semibold">Categories</span>
+              <strong className="-mt-1 text-xs text-slate-900">{categoryBreakdown.entries.length}</strong>
+            </div>
+          </div>
+          <div className="space-y-2 text-xs w-full min-w-0">
+            {categoryBreakdown.entries.length === 0 ? (
+              <p className="text-xs text-slate-400">No products added yet.</p>
+            ) : (
+              categoryBreakdown.entries.slice(0, 4).map((x, idx) => {
+                const colors = ["bg-emerald-600", "bg-teal-700", "bg-blue-600", "bg-amber-500"];
+                return (
+                  <div className="flex items-center justify-between gap-2" key={x.name}>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className={`size-2 rounded-full shrink-0 ${colors[idx % colors.length]}`} />
+                      <span className="truncate text-slate-600">{x.name}</span>
+                    </div>
+                    <strong className="text-slate-800 shrink-0">{x.pct}%</strong>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+      </Card>
     </div>
   </>;
 }
 
-function ProductTable({ compact = false, productsList, onProduct, onShowQr }: { compact?: boolean; productsList?: ProductDetail[]; onProduct: (p: ProductDetail) => void; onShowQr?: (p: any) => void }) {
+function ProductTable({
+  compact = false,
+  productsList,
+  onProduct,
+  onShowQr,
+  onAddToPrintQueue,
+  selectedIds,
+  onToggleSelect,
+  onToggleSelectAll,
+  onDeleteSingle,
+}: {
+  compact?: boolean;
+  productsList?: ProductDetail[];
+  onProduct: (p: ProductDetail) => void;
+  onShowQr?: (p: any) => void;
+  onAddToPrintQueue?: (p: any) => void;
+  selectedIds?: Set<string>;
+  onToggleSelect?: (id: string) => void;
+  onToggleSelectAll?: () => void;
+  onDeleteSingle?: (p: ProductDetail) => void;
+}) {
   const [liveProducts, setLiveProducts] = useState<ProductDetail[]>([]);
 
   useEffect(() => {
@@ -379,14 +740,187 @@ function ProductTable({ compact = false, productsList, onProduct, onShowQr }: { 
     return <div className="p-8 text-center text-sm text-slate-500">No products registered yet. Click &quot;Add product&quot; or scan an invoice to populate.</div>;
   }
 
-  return <div className="overflow-x-auto"><table className="w-full min-w-[760px] text-left"><thead><tr className="border-b border-slate-100 bg-slate-50/70 text-[11px] uppercase tracking-wide text-slate-500"><th className="px-5 py-3 font-semibold">Product</th><th className="px-4 py-3 font-semibold">Stock</th><th className="px-4 py-3 font-semibold">Cost</th><th className="px-4 py-3 font-semibold">Selling price</th><th className="px-4 py-3 font-semibold">Margin</th><th className="px-4 py-3 font-semibold">Status</th><th className="px-4 py-3 font-semibold text-center">QR Code</th></tr></thead><tbody className="divide-y divide-slate-100">{rows.map(p => {
-    const cost = Number(p.buyingPrice ?? p.lastPurchaseCost ?? 0);
-    const price = Number(p.sellingPrice ?? 0);
-    const margin = price > 0 ? Math.round(((price - cost) / price) * 100 * 10) / 10 : 0;
-    const stock = Number(p.stock ?? 0);
-    const status = stock === 0 ? "Out of stock" : stock < 10 ? "Low stock" : "In stock";
-    return <tr className="cursor-pointer text-sm hover:bg-slate-50" key={p.id || p.sku} onClick={() => onProduct(p)}><td className="px-5 py-3"><div className="font-semibold text-slate-800">{p.name}</div><div className="text-xs text-slate-400">{p.sku} {p.category ? `· ${p.category}` : ""}</div></td><td className="px-4 py-3 font-medium">{stock} {p.unit || ""}</td><td className="px-4 py-3">{currency(cost)}</td><td className="px-4 py-3 font-semibold text-emerald-800">{currency(price)}</td><td className="px-4 py-3 font-medium text-emerald-700">{margin}%</td><td className="px-4 py-3"><Badge tone={status === "In stock" ? "success" : status === "Low stock" ? "warning" : "danger"}>{status}</Badge></td><td className="px-4 py-3 text-center" onClick={e => e.stopPropagation()}><button type="button" className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm" onClick={() => onShowQr && onShowQr(p)}><Icon name="scan" size={13} /><span>QR</span></button></td></tr>;
-  })}</tbody></table></div>;
+  const allSelected = rows.length > 0 && selectedIds ? rows.every(p => selectedIds.has(p.id)) : false;
+
+  return (
+    <>
+      <div className="divide-y divide-slate-100 sm:hidden">
+        {rows.map(p => {
+          const cost = Number(p.buyingPrice ?? p.lastPurchaseCost ?? 0);
+          const price = Number(p.sellingPrice ?? 0);
+          const margin = price > 0 ? Math.round(((price - cost) / price) * 100 * 10) / 10 : 0;
+          const stock = Number(p.stock ?? 0);
+          const status = stock === 0 ? "Out of stock" : stock < 10 ? "Low stock" : "In stock";
+          const isSelected = selectedIds?.has(p.id) || false;
+          return (
+            <div
+              className={`p-3.5 transition active:bg-slate-100 cursor-pointer ${isSelected ? "bg-emerald-50/60" : "hover:bg-slate-50"}`}
+              key={p.id || p.sku}
+              onClick={() => onProduct(p)}
+            >
+              <div className="flex items-start gap-2.5">
+                {!compact && (
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 size-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer shrink-0"
+                    checked={isSelected}
+                    onChange={() => onToggleSelect && onToggleSelect(p.id)}
+                    onClick={e => e.stopPropagation()}
+                  />
+                )}
+                <div className="min-w-0 flex-1">
+                  <div className="font-semibold text-slate-800 text-sm truncate">{p.name}</div>
+                  <div className="text-xs text-slate-400 mt-0.5">{p.sku} {p.category ? `· ${p.category}` : ""}</div>
+                </div>
+                <div className="flex flex-col items-end gap-1 shrink-0">
+                  <Badge tone={status === "In stock" ? "success" : status === "Low stock" ? "warning" : "danger"}>
+                    {status}
+                  </Badge>
+                  <span className="text-[11px] font-semibold text-slate-500">{stock} {p.unit || ""}</span>
+                </div>
+              </div>
+              <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 text-xs">
+                <div className="flex items-center gap-2.5 text-[11px]">
+                  <div>
+                    <span className="text-slate-400">Price: </span>
+                    <span className="font-bold text-emerald-800">{currency(price)}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400">Cost: </span>
+                    <span className="text-slate-600">{currency(cost)}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400">Margin: </span>
+                    <span className="font-semibold text-emerald-700">{margin}%</span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5 ml-auto shrink-0">
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50 shadow-sm"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (onShowQr) onShowQr(p);
+                    }}
+                  >
+                    <Icon name="scan" size={12} />
+                    <span>Barcode</span>
+                  </button>
+                  {onAddToPrintQueue && (
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1 rounded-md border border-emerald-300 bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-800 hover:bg-emerald-100 shadow-sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onAddToPrintQueue(p);
+                      }}
+                      title="Add to A4 print queue"
+                    >
+                      <Icon name="plus" size={11} />
+                      <span>Print</span>
+                    </button>
+                  )}
+                  {!compact && onDeleteSingle && (
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 shadow-sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDeleteSingle(p);
+                      }}
+                      title="Remove product from inventory"
+                    >
+                      <Icon name="trash" size={11} />
+                      <span>Delete</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="hidden sm:block overflow-x-auto">
+        <table className="w-full min-w-[760px] text-left">
+          <thead>
+            <tr className="border-b border-slate-100 bg-slate-50/70 text-[11px] uppercase tracking-wide text-slate-500">
+              {!compact && (
+                <th className="w-10 px-4 py-3">
+                  <input
+                    type="checkbox"
+                    className="size-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                    checked={allSelected}
+                    onChange={onToggleSelectAll}
+                  />
+                </th>
+              )}
+              <th className="px-5 py-3 font-semibold">Product</th>
+              <th className="px-4 py-3 font-semibold">Stock</th>
+              <th className="px-4 py-3 font-semibold">Cost</th>
+              <th className="px-4 py-3 font-semibold">Selling price</th>
+              <th className="px-4 py-3 font-semibold">Margin</th>
+              <th className="px-4 py-3 font-semibold">Status</th>
+              <th className="px-4 py-3 font-semibold text-center">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {rows.map(p => {
+              const cost = Number(p.buyingPrice ?? p.lastPurchaseCost ?? 0);
+              const price = Number(p.sellingPrice ?? 0);
+              const margin = price > 0 ? Math.round(((price - cost) / price) * 100 * 10) / 10 : 0;
+              const stock = Number(p.stock ?? 0);
+              const status = stock === 0 ? "Out of stock" : stock < 10 ? "Low stock" : "In stock";
+              const isSelected = selectedIds?.has(p.id) || false;
+              return (
+                <tr className={`cursor-pointer text-sm transition ${isSelected ? "bg-emerald-50/50" : "hover:bg-slate-50"}`} key={p.id || p.sku} onClick={() => onProduct(p)}>
+                  {!compact && (
+                    <td className="w-10 px-4 py-3" onClick={e => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        className="size-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                        checked={isSelected}
+                        onChange={() => onToggleSelect && onToggleSelect(p.id)}
+                      />
+                    </td>
+                  )}
+                  <td className="px-5 py-3">
+                    <div className="font-semibold text-slate-800">{p.name}</div>
+                    <div className="text-xs text-slate-400">{p.sku} {p.category ? `· ${p.category}` : ""}</div>
+                  </td>
+                  <td className="px-4 py-3 font-medium">{stock} {p.unit || ""}</td>
+                  <td className="px-4 py-3">{currency(cost)}</td>
+                  <td className="px-4 py-3 font-semibold text-emerald-800">{currency(price)}</td>
+                  <td className="px-4 py-3 font-medium text-emerald-700">{margin}%</td>
+                  <td className="px-4 py-3">
+                    <Badge tone={status === "In stock" ? "success" : status === "Low stock" ? "warning" : "danger"}>{status}</Badge>
+                  </td>
+                  <td className="px-4 py-3 text-center" onClick={e => e.stopPropagation()}>
+                    <div className="inline-flex items-center gap-1.5 justify-center">
+                      <button type="button" className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm" onClick={() => onShowQr && onShowQr(p)}>
+                        <Icon name="scan" size={13} />
+                        <span>Barcode</span>
+                      </button>
+                      {onAddToPrintQueue && (
+                        <button type="button" className="inline-flex items-center gap-1 rounded-lg border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-800 hover:bg-emerald-100 shadow-sm" onClick={() => onAddToPrintQueue(p)} title="Add to A4 print queue">
+                          <Icon name="plus" size={12} />
+                          <span>Print</span>
+                        </button>
+                      )}
+                      {!compact && onDeleteSingle && (
+                        <button type="button" className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-100 shadow-sm" onClick={() => onDeleteSingle(p)} title="Remove product from inventory">
+                          <Icon name="trash" size={13} />
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
 }
 
 function ProductDialog({ product, isNew = false, onClose, onShowQr, onSaved }: { product: Partial<ProductDetail>; isNew?: boolean; onClose: () => void; onShowQr?: (p: any) => void; onSaved?: () => void }) {
@@ -405,6 +939,7 @@ function ProductDialog({ product, isNew = false, onClose, onShowQr, onSaved }: {
     pitchHook: product.pitchHook || "",
   });
   const [submitting, setSubmitting] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [enriching, setEnriching] = useState(false);
   const [webIntelligence, setWebIntelligence] = useState<ProductWebIntelligence | null>(null);
   const [err, setErr] = useState("");
@@ -453,19 +988,36 @@ function ProductDialog({ product, isNew = false, onClose, onShowQr, onSaved }: {
     }
   };
 
-  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm" onMouseDown={onClose}><Card className="w-full max-w-2xl shadow-2xl"><div onMouseDown={e => e.stopPropagation()}><div className="flex items-start justify-between border-b border-slate-100 p-5"><div><h2 className="text-xl font-bold text-slate-900">{isNew ? "Add New Product" : form.name}</h2><p className="text-sm text-slate-500">{form.sku ? `SKU: ${form.sku}` : "Provide details or fetch live intelligence from the web"}</p></div><Button variant="ghost" onClick={onClose}><Icon name="close" /></Button></div>
+  const handleDelete = async () => {
+    if (!product.id) return;
+    if (!window.confirm(`Are you sure you want to remove "${form.name}" from inventory? Related stock levels, pricing, and history will be cleared while purchase invoice records remain safe.`)) {
+      return;
+    }
+    setDeleting(true);
+    setErr("");
+    try {
+      await deleteProduct(product.id);
+      if (onSaved) onSaved();
+      onClose();
+    } catch (e: any) {
+      setErr(e.message || "Failed to remove product");
+      setDeleting(false);
+    }
+  };
+
+  return <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-950/40 p-0 sm:p-4 backdrop-blur-sm" onMouseDown={onClose}><Card className="w-full max-w-2xl rounded-t-2xl sm:rounded-xl max-h-[92vh] sm:max-h-[85vh] flex flex-col shadow-2xl overflow-hidden"><div className="flex flex-col h-full min-h-0" onMouseDown={e => e.stopPropagation()}><div className="flex items-start justify-between border-b border-slate-100 p-4 sm:p-5"><div><h2 className="text-lg sm:text-xl font-bold text-slate-900">{isNew ? "Add New Product" : form.name}</h2><p className="text-xs sm:text-sm text-slate-500">{form.sku ? `SKU: ${form.sku}` : "Provide details or fetch live intelligence from the web"}</p></div><Button variant="ghost" onClick={onClose}><Icon name="close" /></Button></div>
     {err && <div className="m-4 rounded-lg bg-rose-50 p-3 text-sm text-rose-700">{err}</div>}
     
-    <div className="max-h-[65vh] overflow-y-auto p-5">
-      <div className="mb-4 flex items-center justify-between rounded-xl border border-emerald-100 bg-emerald-50/60 p-3">
+    <div className="flex-1 overflow-y-auto p-4 sm:p-5">
+      <div className="mb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-emerald-100 bg-emerald-50/60 p-3">
         <div className="flex items-center gap-2.5">
-          <span className="grid size-8 place-items-center rounded-lg bg-emerald-600 text-white"><Icon name="spark" size={16} /></span>
+          <span className="grid size-8 place-items-center rounded-lg bg-emerald-600 text-white shrink-0"><Icon name="spark" size={16} /></span>
           <div>
             <div className="text-xs font-bold text-emerald-950">SearXNG Product Intelligence</div>
             <div className="text-[11px] text-emerald-700">Search the web for MRP, HSN, brand, and counter sales hooks</div>
           </div>
         </div>
-        <Button disabled={enriching || !form.name.trim()} onClick={handleEnrich} type="button" variant="secondary" className="border-emerald-300 text-emerald-800 hover:bg-emerald-100">
+        <Button disabled={enriching || !form.name.trim()} onClick={handleEnrich} type="button" variant="secondary" className="w-full sm:w-auto border-emerald-300 text-emerald-800 hover:bg-emerald-100 shrink-0">
           <Icon name="search" size={14} />
           {enriching ? "Searching..." : "Auto-fill from Web"}
         </Button>
@@ -484,7 +1036,7 @@ function ProductDialog({ product, isNew = false, onClose, onShowQr, onSaved }: {
         </div>
       )}
 
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className="grid gap-3 sm:gap-4 sm:grid-cols-2">
         <label className="text-xs font-semibold text-slate-600 sm:col-span-2">Product name *<Input className="mt-1.5" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="e.g. Fortune Sunflower Oil 1L" /></label>
         <label className="text-xs font-semibold text-slate-600">SKU / Code<Input className="mt-1.5" value={form.sku} onChange={e => setForm({ ...form, sku: e.target.value })} placeholder="Leave blank to auto-generate" /></label>
         <label className="text-xs font-semibold text-slate-600">Category<Select className="mt-1.5 w-full" value={form.category} onChange={e => setForm({ ...form, category: e.target.value })}><option>Grocery</option><option>Home care</option><option>Personal care</option><option>Snacks</option><option>Beverages</option><option>General</option></Select></label>
@@ -499,10 +1051,30 @@ function ProductDialog({ product, isNew = false, onClose, onShowQr, onSaved }: {
         <label className="text-xs font-semibold text-slate-600 sm:col-span-2">Sales Pitch Hook<Input className="mt-1.5" value={form.pitchHook} onChange={e => setForm({ ...form, pitchHook: e.target.value })} placeholder="Customer counter recommendation hook" /></label>
       </div>
     </div>
-    <div className="flex items-center justify-between border-t border-slate-100 p-4">{!isNew && product.qrToken ? <Button variant="secondary" onClick={() => onShowQr && onShowQr(product)}><Icon name="scan" size={15} />View / Print QR Code</Button> : <div />}<div className="flex gap-2"><Button variant="secondary" onClick={onClose}>Cancel</Button><Button disabled={submitting} onClick={handleSave}><Icon name="check" size={16} />{submitting ? "Saving..." : "Save product"}</Button></div></div></div></Card></div>;
+    <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-between gap-2 border-t border-slate-100 p-3.5 sm:p-4">
+      <div className="flex flex-wrap items-center gap-2">
+        {!isNew && (product.sku || product.qrToken) && (
+          <Button variant="secondary" className="w-full sm:w-auto" onClick={() => onShowQr && onShowQr(product)}>
+            <Icon name="scan" size={15} />View / Print Barcode
+          </Button>
+        )}
+        {!isNew && product.id && (
+          <Button variant="danger" className="w-full sm:w-auto text-xs sm:text-sm" disabled={deleting || submitting} onClick={handleDelete}>
+            <Icon name="trash" size={14} />
+            {deleting ? "Removing..." : "Remove from inventory"}
+          </Button>
+        )}
+      </div>
+      <div className="flex gap-2 w-full sm:w-auto">
+        <Button variant="secondary" className="flex-1 sm:flex-initial" onClick={onClose}>Cancel</Button>
+        <Button disabled={submitting || deleting} className="flex-1 sm:flex-initial" onClick={handleSave}>
+          <Icon name="check" size={16} />{submitting ? "Saving..." : "Save product"}
+        </Button>
+      </div>
+    </div></div></Card></div>;
 }
 
-function ProductsScreen({ onShowQr, onScanQr }: { onShowQr?: (p: any) => void; onScanQr?: () => void }) {
+function ProductsScreen({ onShowQr, onScanQr, printQueueCount = 0, onOpenPrintModal, onAddToPrintQueue }: { onShowQr?: (p: any) => void; onScanQr?: () => void; printQueueCount?: number; onOpenPrintModal?: () => void; onAddToPrintQueue?: (p: any) => void }) {
   const [productsList, setProductsList] = useState<ProductDetail[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
@@ -510,6 +1082,14 @@ function ProductsScreen({ onShowQr, onScanQr }: { onShowQr?: (p: any) => void; o
   const [selected, setSelected] = useState<ProductDetail | null>(null);
   const [isNewProduct, setIsNewProduct] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [deleteConfirm, setDeleteConfirm] = useState<{ open: boolean; ids: string[]; count: number; title: string }>({
+    open: false,
+    ids: [],
+    count: 0,
+    title: "",
+  });
+  const [batchDeleting, setBatchDeleting] = useState(false);
 
   const loadProducts = () => {
     setLoading(true);
@@ -533,28 +1113,236 @@ function ProductsScreen({ onShowQr, onScanQr }: { onShowQr?: (p: any) => void; o
     });
   }, [productsList, query, status]);
 
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    const selectable = filtered.map(p => p.id).filter(Boolean);
+    if (selectable.length > 0 && selectedIds.size === selectable.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(selectable));
+    }
+  };
+
+  const handleDeleteSingle = (p: ProductDetail) => {
+    setDeleteConfirm({
+      open: true,
+      ids: [p.id],
+      count: 1,
+      title: `Remove "${p.name}" from inventory?`,
+    });
+  };
+
+  const handleConfirmDelete = async () => {
+    if (deleteConfirm.ids.length === 0) return;
+    setBatchDeleting(true);
+    try {
+      if (deleteConfirm.ids.length === 1) {
+        await deleteProduct(deleteConfirm.ids[0]);
+      } else {
+        await deleteProductsBatch(deleteConfirm.ids);
+      }
+      setSelectedIds(prev => {
+        const next = new Set(prev);
+        deleteConfirm.ids.forEach(id => next.delete(id));
+        return next;
+      });
+      setDeleteConfirm({ open: false, ids: [], count: 0, title: "" });
+      loadProducts();
+    } catch (e: any) {
+      alert(e.message || "Failed to remove products");
+    } finally {
+      setBatchDeleting(false);
+    }
+  };
+
   const totalStockUnits = useMemo(() => productsList.reduce((acc, p) => acc + Number(p.stock ?? 0), 0), [productsList]);
   const totalValuation = useMemo(() => productsList.reduce((acc, p) => acc + (Number(p.stock ?? 0) * Number(p.buyingPrice ?? p.lastPurchaseCost ?? 0)), 0), [productsList]);
 
   return <>
-    <PageHeader title="Products" description="Manage your product catalogue, stock levels, pricing, and QR codes in one place." actions={<><Button variant="secondary" onClick={onScanQr}><Icon name="scan" size={16} />Scan QR (Prices)</Button><Button variant="secondary" onClick={() => setImporting(true)}><Icon name="upload" size={16} />Import CSV / Excel</Button><Button onClick={() => { setSelected({ name: "", sku: "", category: "Grocery", stock: 0, sellingPrice: 0, buyingPrice: 0 } as ProductDetail); setIsNewProduct(true); }}><Icon name="plus" size={16} />Add product</Button></>} />
+    <PageHeader
+      title="Products"
+      description="Manage your product catalogue, stock levels, pricing, and barcodes in one place."
+      actions={
+        <div className="flex flex-col gap-2 w-full sm:w-auto sm:flex-row sm:flex-wrap sm:items-center">
+          <Button className="w-full sm:w-auto px-3.5 text-xs sm:text-sm order-first sm:order-last" onClick={() => { setSelected({ name: "", sku: "", category: "Grocery", stock: 0, sellingPrice: 0, buyingPrice: 0 } as ProductDetail); setIsNewProduct(true); }}>
+            <Icon name="plus" size={16} />
+            <span>Add product</span>
+          </Button>
+          <div className="grid grid-cols-3 gap-1.5 w-full sm:w-auto sm:flex sm:items-center sm:gap-2">
+            {onOpenPrintModal && (
+              <Button variant="secondary" className="px-1.5 sm:px-3 text-xs w-full sm:w-auto relative justify-center" onClick={onOpenPrintModal} title="A4 Print Sheet">
+                <Icon name="file" size={15} />
+                <span className="truncate">Print</span>
+                {printQueueCount > 0 && (
+                  <span className="rounded-full bg-emerald-600 px-1 py-0.2 text-[9px] font-bold text-white shrink-0">
+                    {printQueueCount}
+                  </span>
+                )}
+              </Button>
+            )}
+            <Button variant="secondary" className="px-1.5 sm:px-3 text-xs w-full sm:w-auto justify-center" onClick={onScanQr} title="Scan Barcode">
+              <Icon name="scan" size={15} />
+              <span className="truncate">Scan</span>
+            </Button>
+            <Button variant="secondary" className="px-1.5 sm:px-3 text-xs w-full sm:w-auto justify-center" onClick={() => setImporting(true)} title="Import CSV or Excel">
+              <Icon name="upload" size={15} />
+              <span className="truncate">Import</span>
+            </Button>
+          </div>
+        </div>
+      }
+    />
+
+    {selectedIds.size > 0 && (
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-rose-200 bg-rose-50/90 p-3 sm:px-4 shadow-sm">
+        <div className="flex items-center gap-3">
+          <span className="grid size-7 place-items-center rounded-lg bg-rose-600 text-xs font-bold text-white shadow-sm">
+            {selectedIds.size}
+          </span>
+          <div>
+            <div className="text-xs sm:text-sm font-bold text-rose-950">
+              {selectedIds.size} product{selectedIds.size > 1 ? "s" : ""} selected
+            </div>
+            <div className="text-[11px] text-rose-700">
+              Selected items can be removed from active inventory simultaneously
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="secondary"
+            className="h-8 px-2.5 text-xs bg-white text-slate-700 hover:bg-slate-50"
+            onClick={toggleSelectAll}
+          >
+            {selectedIds.size === filtered.length ? "Deselect all" : `Select all (${filtered.length})`}
+          </Button>
+          <Button
+            type="button"
+            variant="danger"
+            className="h-8 px-3 text-xs shadow-sm bg-rose-600 text-white hover:bg-rose-700"
+            onClick={() =>
+              setDeleteConfirm({
+                open: true,
+                ids: Array.from(selectedIds),
+                count: selectedIds.size,
+                title: `Remove ${selectedIds.size} product${selectedIds.size > 1 ? "s" : ""} from inventory?`,
+              })
+            }
+          >
+            <Icon name="trash" size={14} />
+            <span>Remove {selectedIds.size} from inventory</span>
+          </Button>
+        </div>
+      </div>
+    )}
+
     <div className="grid gap-3 sm:grid-cols-3 mb-4">
       <MetricCard title="Total Products" value={String(productsList.length)} meta="In active catalogue" icon="tag" tone="blue" />
       <MetricCard title="Total Stock Units" value={String(totalStockUnits)} meta="Quantity on hand across all items" icon="box" tone="emerald" />
       <MetricCard title="Inventory Valuation" value={currency(totalValuation)} meta="Calculated from buying cost" icon="report" />
     </div>
-    <Card><div className="flex flex-col gap-3 border-b border-slate-100 p-4 sm:flex-row"><div className="relative flex-1"><Icon className="absolute left-3 top-2.5 text-slate-400" name="search" size={17} /><Input className="pl-9" placeholder="Search by product name, SKU or brand" value={query} onChange={e => setQuery(e.target.value)} /></div><Select value={status} onChange={e => setStatus(e.target.value)}><option>All status</option><option>In stock</option><option>Low stock</option><option>Out of stock</option></Select><Button variant="secondary" onClick={loadProducts}><Icon name="refresh" size={16} />Refresh</Button></div>
-      {loading ? <div className="p-16 text-center text-sm text-slate-500">Loading products from database...</div> : filtered.length ? <ProductTable productsList={filtered} onProduct={(p) => { setSelected(p); setIsNewProduct(false); }} onShowQr={onShowQr} /> : <div className="grid place-items-center py-20 text-center"><span className="grid size-12 place-items-center rounded-full bg-slate-100 text-slate-400"><Icon name="search" /></span><h3 className="mt-3 font-bold text-slate-800">No products found</h3><p className="mt-1 text-sm text-slate-500">Try changing your search or add a new product.</p></div>}
-      <div className="flex items-center justify-between border-t border-slate-100 px-5 py-3 text-xs text-slate-500"><span>Showing {filtered.length} of {productsList.length} products</span></div>
+    <Card>
+      <div className="flex flex-col gap-2.5 border-b border-slate-100 p-3 sm:p-4 sm:flex-row sm:items-center">
+        <div className="relative flex-1">
+          <Icon className="absolute left-3 top-2.5 text-slate-400" name="search" size={17} />
+          <Input className="pl-9" placeholder="Search by product name, SKU or brand" value={query} onChange={e => setQuery(e.target.value)} />
+        </div>
+        <div className="flex gap-2">
+          <Select className="flex-1 sm:w-auto text-xs sm:text-sm" value={status} onChange={e => setStatus(e.target.value)}>
+            <option>All status</option>
+            <option>In stock</option>
+            <option>Low stock</option>
+            <option>Out of stock</option>
+          </Select>
+          <Button variant="secondary" className="shrink-0 px-3 text-xs sm:text-sm" onClick={loadProducts}>
+            <Icon name="refresh" size={16} />
+            <span className="hidden sm:inline">Refresh</span>
+          </Button>
+        </div>
+      </div>
+      {loading ? (
+        <div className="p-16 text-center text-sm text-slate-500">Loading products from database...</div>
+      ) : filtered.length ? (
+        <ProductTable
+          productsList={filtered}
+          onProduct={(p) => { setSelected(p); setIsNewProduct(false); }}
+          onShowQr={onShowQr}
+          onAddToPrintQueue={onAddToPrintQueue}
+          selectedIds={selectedIds}
+          onToggleSelect={toggleSelect}
+          onToggleSelectAll={toggleSelectAll}
+          onDeleteSingle={handleDeleteSingle}
+        />
+      ) : (
+        <div className="grid place-items-center py-20 text-center">
+          <span className="grid size-12 place-items-center rounded-full bg-slate-100 text-slate-400"><Icon name="search" /></span>
+          <h3 className="mt-3 font-bold text-slate-800">No products found</h3>
+          <p className="mt-1 text-sm text-slate-500">Try changing your search or add a new product.</p>
+        </div>
+      )}
+      <div className="flex items-center justify-between border-t border-slate-100 px-5 py-3 text-xs text-slate-500">
+        <span>Showing {filtered.length} of {productsList.length} products</span>
+        {selectedIds.size > 0 && <span className="font-semibold text-rose-600">{selectedIds.size} selected</span>}
+      </div>
     </Card>
     {selected && <ProductDialog product={selected} isNew={isNewProduct} onClose={() => setSelected(null)} onShowQr={onShowQr} onSaved={loadProducts} />}
     {importing && <CsvImport onClose={() => setImporting(false)} />}
+
+    {deleteConfirm.open && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm">
+        <Card className="w-full max-w-md p-5 shadow-2xl">
+          <div className="flex items-start gap-3">
+            <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-rose-100 text-rose-700">
+              <Icon name="warning" size={20} />
+            </span>
+            <div>
+              <h3 className="text-base font-bold text-slate-900">
+                {deleteConfirm.title}
+              </h3>
+              <p className="mt-1 text-xs text-slate-600 leading-relaxed">
+                This will remove {deleteConfirm.count} product{deleteConfirm.count > 1 ? "s" : ""} from your inventory catalogue, including live stock balances, price points, and movement history. Purchase invoice transaction history will be safely preserved.
+              </p>
+            </div>
+          </div>
+          <div className="mt-5 flex items-center justify-end gap-2 border-t border-slate-100 pt-4">
+            <Button
+              variant="secondary"
+              className="text-xs"
+              onClick={() => setDeleteConfirm({ open: false, ids: [], count: 0, title: "" })}
+              disabled={batchDeleting}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              className="text-xs bg-rose-600 text-white hover:bg-rose-700"
+              onClick={handleConfirmDelete}
+              disabled={batchDeleting}
+            >
+              {batchDeleting ? "Removing..." : `Remove ${deleteConfirm.count} Product${deleteConfirm.count > 1 ? "s" : ""}`}
+            </Button>
+          </div>
+        </Card>
+      </div>
+    )}
   </>;
 }
 
 function CsvImport({ onClose }: { onClose: () => void }) {
   const [step, setStep] = useState(1);
-  return <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/40 p-4 backdrop-blur-sm"><Card className="w-full max-w-3xl shadow-2xl"><div className="flex items-center justify-between border-b border-slate-100 p-5"><div><h2 className="text-lg font-bold text-slate-900">Import products</h2><p className="text-sm text-slate-500">Upload and map a CSV or Excel file</p></div><Button variant="ghost" onClick={onClose}><Icon name="close" /></Button></div>{step === 1 ? <div className="p-6"><button className="grid w-full place-items-center rounded-xl border-2 border-dashed border-slate-200 bg-slate-50 py-14 hover:border-emerald-400 hover:bg-emerald-50/30" onClick={() => setStep(2)}><span className="grid size-12 place-items-center rounded-full bg-emerald-100 text-emerald-700"><Icon name="upload" /></span><strong className="mt-3 text-sm text-slate-800">Choose a file or drag it here</strong><span className="mt-1 text-xs text-slate-500">CSV, XLS or XLSX up to 10 MB</span></button></div> : <div className="p-6"><div className="mb-4 flex items-center gap-3 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-800"><Icon name="check" /><strong>products_march.xlsx</strong><span className="text-emerald-600">· 126 rows found</span></div><h3 className="font-bold text-slate-800">Map file columns</h3><div className="mt-3 grid grid-cols-2 gap-3">{[["Product Name","Name"],["Item Code","SKU"],["Purchase Rate","Cost price"],["MRP","Selling price"],["Closing Stock","Opening quantity"],["GST %","Tax rate"]].map(x => <div className="flex items-center gap-2 rounded-lg border border-slate-200 p-3" key={x[0]}><span className="flex-1 text-xs font-medium text-slate-500">{x[0]}</span><Icon name="arrow" size={14} /><Select defaultValue={x[1]}>{[x[1],"Ignore"].map(v=><option key={v}>{v}</option>)}</Select></div>)}</div></div>}<div className="flex justify-end gap-2 border-t border-slate-100 p-4"><Button variant="secondary" onClick={onClose}>Cancel</Button>{step === 2 && <Button onClick={onClose}>Import 126 products</Button>}</div></Card></div>;
+  return <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-950/40 p-0 sm:p-4 backdrop-blur-sm"><Card className="w-full max-w-3xl rounded-t-2xl sm:rounded-xl shadow-2xl max-h-[92vh] sm:max-h-[85vh] flex flex-col overflow-hidden"><div className="flex items-center justify-between border-b border-slate-100 p-4 sm:p-5"><div><h2 className="text-base sm:text-lg font-bold text-slate-900">Import products</h2><p className="text-xs sm:text-sm text-slate-500">Upload and map a CSV or Excel file</p></div><Button variant="ghost" onClick={onClose}><Icon name="close" /></Button></div><div className="flex-1 overflow-y-auto">{step === 1 ? <div className="p-4 sm:p-6"><button className="grid w-full place-items-center rounded-xl border-2 border-dashed border-slate-200 bg-slate-50 py-10 sm:py-14 hover:border-emerald-400 hover:bg-emerald-50/30" onClick={() => setStep(2)}><span className="grid size-12 place-items-center rounded-full bg-emerald-100 text-emerald-700"><Icon name="upload" /></span><strong className="mt-3 text-sm text-slate-800">Choose a file or drag it here</strong><span className="mt-1 text-xs text-slate-500">CSV, XLS or XLSX up to 10 MB</span></button></div> : <div className="p-4 sm:p-6"><div className="mb-4 flex items-center gap-3 rounded-lg bg-emerald-50 p-3 text-xs sm:text-sm text-emerald-800"><Icon name="check" /><strong>products_march.xlsx</strong><span className="text-emerald-600">· 126 rows found</span></div><h3 className="font-bold text-sm sm:text-base text-slate-800">Map file columns</h3><div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">{[["Product Name","Name"],["Item Code","SKU"],["Purchase Rate","Cost price"],["MRP","Selling price"],["Closing Stock","Opening quantity"],["GST %","Tax rate"]].map(x => <div className="flex items-center gap-2 rounded-lg border border-slate-200 p-3" key={x[0]}><span className="flex-1 text-xs font-medium text-slate-500">{x[0]}</span><Icon name="arrow" size={14} /><Select className="text-xs" defaultValue={x[1]}>{[x[1],"Ignore"].map(v=><option key={v}>{v}</option>)}</Select></div>)}</div></div>}</div><div className="flex justify-end gap-2 border-t border-slate-100 p-3.5 sm:p-4"><Button variant="secondary" className="flex-1 sm:flex-initial" onClick={onClose}>Cancel</Button>{step === 2 && <Button className="flex-1 sm:flex-initial" onClick={onClose}>Import 126 products</Button>}</div></Card></div>;
 }
 
 interface ReviewItem {
@@ -583,17 +1371,17 @@ interface ReviewItem {
 
 function Step({ number, label, active, done }: { number: number; label: string; active: boolean; done: boolean }) {
   return (
-    <div className="flex items-center gap-2">
-      <span className={`grid size-8 place-items-center rounded-full text-xs font-bold ${active ? "bg-emerald-600 text-white" : "bg-slate-200 text-slate-500"}`}>
-        {done ? <Icon name="check" size={15} /> : number}
+    <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+      <span className={`grid size-7 sm:size-8 place-items-center rounded-full text-xs font-bold ${active ? "bg-emerald-600 text-white" : "bg-slate-200 text-slate-500"}`}>
+        {done ? <Icon name="check" size={14} /> : number}
       </span>
-      <span className={`text-sm font-semibold ${active ? "text-slate-800" : "text-slate-400"}`}>{label}</span>
+      <span className={`text-xs sm:text-sm font-semibold truncate ${active ? "text-slate-800" : "text-slate-400"}`}>{label}</span>
     </div>
   );
 }
 
 function Line({ active }: { active: boolean }) {
-  return <div className={`mx-3 h-px max-w-24 flex-1 ${active ? "bg-emerald-600" : "bg-slate-200"}`} />;
+  return <div className={`mx-1.5 sm:mx-3 h-px max-w-8 sm:max-w-24 flex-1 min-w-3 ${active ? "bg-emerald-600" : "bg-slate-200"}`} />;
 }
 
 function InvoiceScanner() {
@@ -621,6 +1409,8 @@ function InvoiceScanner() {
   const [taxAmount, setTaxAmount] = useState(20490.25);
   const [grandTotal, setGrandTotal] = useState(134325.0);
 
+  const [duplicateConflict, setDuplicateConflict] = useState<DuplicateInvoiceConflictDetails | null>(null);
+
   const [items, setItems] = useState<ReviewItem[]>([]);
 
   const fileRef = useRef<HTMLInputElement>(null);
@@ -636,6 +1426,9 @@ function InvoiceScanner() {
       } else {
         setFilePreview(null);
       }
+    } else {
+      setFileName("Sample Invoice");
+      setFilePreview(null);
     }
 
     try {
@@ -772,7 +1565,7 @@ function InvoiceScanner() {
     );
   };
 
-  const handleConfirmSave = async () => {
+  const handleConfirmSave = async (forceUpdate = false) => {
     const includedItems = items.filter((x) => x.included);
     if (includedItems.length === 0) {
       setError("Please select at least one item to import.");
@@ -803,6 +1596,7 @@ function InvoiceScanner() {
         taxAmount: taxAmount,
         totalAmount: grandTotal,
         sourceFileUrl: sourceFileUrl || undefined,
+        updateExisting: forceUpdate,
         items: includedItems.map((item) => {
           let effDiscountPrice: number | undefined = undefined;
           if (item.discountPercentage !== null && item.discountPercentage > 0) {
@@ -838,10 +1632,13 @@ function InvoiceScanner() {
       };
 
       const saved = await savePurchaseInvoice(payload);
+      setDuplicateConflict(null);
       setSuccessResult(saved);
       setStep(3);
     } catch (err: unknown) {
-      if (err instanceof Error) {
+      if (err instanceof DuplicateInvoiceError) {
+        setDuplicateConflict(err.conflictDetails);
+      } else if (err instanceof Error) {
         setError(err.message);
       } else {
         setError("Failed to save purchase invoice.");
@@ -868,12 +1665,12 @@ function InvoiceScanner() {
         description="Extract supplier invoices, review selling prices & pitches, and post directly to inventory."
       />
 
-      <div className="mb-5 flex items-center">
+      <div className="mb-5 flex items-center justify-between sm:justify-start overflow-x-auto pb-1">
         <Step number={1} label="Scan" active={step >= 1} done={step > 1} />
         <Line active={step > 1} />
         <Step number={2} label="Review & Pricing" active={step >= 2} done={step > 2} />
         <Line active={step > 2} />
-        <Step number={3} label="Saved to Inventory" active={step >= 3} done={step === 3} />
+        <Step number={3} label="Saved" active={step >= 3} done={step === 3} />
       </div>
 
       {error && (
@@ -884,92 +1681,92 @@ function InvoiceScanner() {
       )}
 
       {step === 1 && (
-        <Card className="p-5">
-          <div className="grid min-h-[460px] gap-6 lg:grid-cols-2">
-            <button
-              onClick={() => fileRef.current?.click()}
-              className="group grid place-items-center rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50 p-8 text-center transition hover:border-emerald-500 hover:bg-emerald-50/20"
-              disabled={loading}
-            >
-              <input
-                ref={fileRef}
-                className="hidden"
-                type="file"
-                accept=".pdf,image/png,image/jpeg,image/webp"
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) handleFileUpload(f);
-                }}
-              />
-              <div>
-                <span className="mx-auto grid size-16 place-items-center rounded-2xl bg-emerald-100 text-emerald-700 transition group-hover:scale-105">
-                  <Icon name="scan" size={30} />
-                </span>
-                <h2 className="mt-4 text-base font-bold text-slate-900">Upload supplier invoice</h2>
-                <p className="mx-auto mt-2 max-w-xs text-xs leading-5 text-slate-500">
-                  Select a PNG, JPG, or PDF purchase invoice. Multi-modal AI will extract vendor information, line items, rates, discounts and taxes.
-                </p>
-                <div className="mt-6 flex flex-wrap justify-center gap-2">
-                  <Button
-                    type="button"
-                    disabled={loading}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      fileRef.current?.click();
-                    }}
-                  >
-                    <Icon name="upload" size={16} />
-                    {loading ? "Extracting invoice…" : "Select Invoice File"}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    disabled={loading}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleFileUpload(null);
-                    }}
-                  >
-                    Load Sample Invoice
-                  </Button>
-                </div>
-              </div>
-            </button>
-
-            <div className="flex flex-col justify-between rounded-2xl border border-slate-200 bg-white p-6">
-              <div>
-                <h3 className="font-bold text-slate-900">Automated Intake Process</h3>
-                <div className="mt-5 space-y-4">
-                  <div className="flex gap-3">
-                    <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-emerald-50 text-xs font-bold text-emerald-700">1</span>
-                    <div>
-                      <h4 className="text-xs font-bold text-slate-800">OCR & Document Parsing</h4>
-                      <p className="mt-0.5 text-xs leading-5 text-slate-500">Extracts seller, buyer (Bill To), HSN/SAC codes, row discounts, GST %, and totals.</p>
-                    </div>
-                  </div>
-                  <div className="flex gap-3">
-                    <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-emerald-50 text-xs font-bold text-emerald-700">2</span>
-                    <div>
-                      <h4 className="text-xs font-bold text-slate-800">Catalogue Matching & Pricing Review</h4>
-                      <p className="mt-0.5 text-xs leading-5 text-slate-500">Matches existing products. Set Selling Price, MRP, Retail Discount %, editable line totals, and pitch descriptions.</p>
-                    </div>
-                  </div>
-                  <div className="flex gap-3">
-                    <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-emerald-50 text-xs font-bold text-emerald-700">3</span>
-                    <div>
-                      <h4 className="text-xs font-bold text-slate-800">Instant Inventory & Cost Ledger Update</h4>
-                      <p className="mt-0.5 text-xs leading-5 text-slate-500">Increments stock on hand, recalculates weighted average purchase cost, and writes stock movement entries.</p>
-                    </div>
+        loading ? (
+          <InvoiceScanningOverlay fileName={fileName} filePreview={filePreview} />
+        ) : (
+          <Card className="p-5">
+            <div className="grid min-h-[460px] gap-6 lg:grid-cols-2">
+              <button
+                onClick={() => fileRef.current?.click()}
+                className="group grid place-items-center rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50 p-8 text-center transition hover:border-emerald-500 hover:bg-emerald-50/20"
+                disabled={loading}
+              >
+                <input
+                  ref={fileRef}
+                  className="hidden"
+                  type="file"
+                  accept=".pdf,image/png,image/jpeg,image/webp"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) handleFileUpload(f);
+                  }}
+                />
+                <div>
+                  <span className="mx-auto grid size-16 place-items-center rounded-2xl bg-emerald-100 text-emerald-700 transition group-hover:scale-105">
+                    <Icon name="scan" size={30} />
+                  </span>
+                  <h2 className="mt-4 text-base font-bold text-slate-900">Upload supplier invoice</h2>
+                  <p className="mx-auto mt-2 max-w-xs text-xs leading-5 text-slate-500">
+                    Select a PNG, JPG, or PDF purchase invoice. Multi-modal AI will extract vendor information, line items, rates, discounts and taxes.
+                  </p>
+                  <div className="mt-6 flex flex-wrap justify-center gap-2">
+                    <Button
+                      type="button"
+                      disabled={loading}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        fileRef.current?.click();
+                      }}
+                    >
+                      <Icon name="upload" size={16} />
+                      {loading ? "Extracting invoice…" : "Select Invoice File"}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      disabled={loading}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleFileUpload(null);
+                      }}
+                    >
+                      Load Sample Invoice
+                    </Button>
                   </div>
                 </div>
-              </div>
+              </button>
 
-              <div className="mt-6 rounded-xl border border-blue-100 bg-blue-50/70 p-4 text-xs text-blue-800">
-                <span className="font-bold">Ollama / AI Integration:</span> When Ollama is active, OCR text and image inputs are parsed using strict row alignment to prevent line shifts.
+              <div className="flex flex-col justify-between rounded-2xl border border-slate-200 bg-white p-6">
+                <div>
+                  <h3 className="font-bold text-slate-900">Automated Intake Process</h3>
+                  <div className="mt-5 space-y-4">
+                    <div className="flex gap-3">
+                      <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-emerald-50 text-xs font-bold text-emerald-700">1</span>
+                      <div>
+                        <h4 className="text-xs font-bold text-slate-800">OCR & Document Parsing</h4>
+                        <p className="mt-0.5 text-xs leading-5 text-slate-500">Extracts seller, buyer (Bill To), HSN/SAC codes, row discounts, GST %, and totals.</p>
+                      </div>
+                    </div>
+                    <div className="flex gap-3">
+                      <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-emerald-50 text-xs font-bold text-emerald-700">2</span>
+                      <div>
+                        <h4 className="text-xs font-bold text-slate-800">Catalogue Matching & Pricing Review</h4>
+                        <p className="mt-0.5 text-xs leading-5 text-slate-500">Matches existing products. Set Selling Price, MRP, Retail Discount %, editable line totals, and pitch descriptions.</p>
+                      </div>
+                    </div>
+                    <div className="flex gap-3">
+                      <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-emerald-50 text-xs font-bold text-emerald-700">3</span>
+                      <div>
+                        <h4 className="text-xs font-bold text-slate-800">Instant Inventory & Cost Ledger Update</h4>
+                        <p className="mt-0.5 text-xs leading-5 text-slate-500">Increments stock on hand, recalculates weighted average purchase cost, and writes stock movement entries.</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
-          </div>
-        </Card>
+          </Card>
+        )
       )}
 
       {step === 2 && (
@@ -986,12 +1783,12 @@ function InvoiceScanner() {
                 </p>
               </div>
 
-              <div className="flex items-center gap-2">
-                <Button variant="secondary" onClick={() => setShowPreviewModal(true)}>
+              <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+                <Button variant="secondary" className="flex-1 sm:flex-initial text-xs sm:text-sm" onClick={() => setShowPreviewModal(true)}>
                   <Icon name="file" size={15} />
                   View Original Document
                 </Button>
-                <Button variant="ghost" onClick={() => setStep(1)}>
+                <Button variant="ghost" className="text-xs sm:text-sm" onClick={() => setStep(1)}>
                   Rescan
                 </Button>
               </div>
@@ -1148,14 +1945,14 @@ function InvoiceScanner() {
                           Qty & Unit
                           <div className="mt-1 flex gap-1">
                             <Input
-                              className="w-16 text-xs"
+                              className="w-1/2 min-w-0 text-xs"
                               type="number"
                               min={1}
                               value={item.quantity}
                               onChange={(e) => updateItem(index, "quantity", Number(e.target.value))}
                             />
                             <Input
-                              className="w-16 text-xs"
+                              className="w-1/2 min-w-0 text-xs"
                               value={item.unit}
                               onChange={(e) => updateItem(index, "unit", e.target.value)}
                             />
@@ -1177,7 +1974,7 @@ function InvoiceScanner() {
                           Bill Disc (% / ₹)
                           <div className="mt-1 flex gap-1">
                             <Input
-                              className="w-16 text-xs"
+                              className="w-1/2 min-w-0 text-xs"
                               type="number"
                               step="0.1"
                               placeholder="%"
@@ -1185,7 +1982,7 @@ function InvoiceScanner() {
                               onChange={(e) => updateItem(index, "invoiceDiscountPercentage", Number(e.target.value))}
                             />
                             <Input
-                              className="w-20 text-xs"
+                              className="w-1/2 min-w-0 text-xs"
                               type="number"
                               step="0.01"
                               placeholder="₹"
@@ -1199,14 +1996,14 @@ function InvoiceScanner() {
                           GST (% / ₹)
                           <div className="mt-1 flex gap-1">
                             <Input
-                              className="w-14 text-xs"
+                              className="w-1/2 min-w-0 text-xs"
                               type="number"
                               placeholder="%"
                               value={item.taxRate}
                               onChange={(e) => updateItem(index, "taxRate", Number(e.target.value))}
                             />
                             <Input
-                              className="w-20 text-xs"
+                              className="w-1/2 min-w-0 text-xs"
                               type="number"
                               step="0.01"
                               placeholder="₹"
@@ -1329,7 +2126,7 @@ function InvoiceScanner() {
                 <Button variant="secondary" onClick={() => setStep(1)}>
                   Back
                 </Button>
-                <Button disabled={saving || activeItems.length === 0} onClick={handleConfirmSave}>
+                <Button disabled={saving || activeItems.length === 0} onClick={() => handleConfirmSave(false)}>
                   <Icon name="check" size={16} />
                   {saving ? "Posting to inventory…" : "Confirm & Post to Inventory"}
                 </Button>
@@ -1472,14 +2269,66 @@ function InvoiceScanner() {
           </Card>
         </div>
       )}
+
+      {duplicateConflict && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm"
+          onMouseDown={() => !saving && setDuplicateConflict(null)}
+        >
+          <Card className="w-full max-w-lg overflow-hidden shadow-2xl">
+            <div onMouseDown={(e) => e.stopPropagation()} className="p-6">
+              <div className="flex items-center gap-3">
+                <span className="grid size-12 shrink-0 place-items-center rounded-2xl bg-amber-100 text-amber-700">
+                  <Icon name="warning" size={24} />
+                </span>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">Invoice Already Exists</h3>
+                  <p className="text-xs text-slate-500">Duplicate invoice detected for this supplier</p>
+                </div>
+              </div>
+
+              <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50/60 p-4 text-xs text-slate-700">
+                <p className="leading-5">
+                  An invoice with number <strong className="font-semibold text-slate-900">{duplicateConflict.invoiceNumber}</strong> from <strong className="font-semibold text-slate-900">{duplicateConflict.supplierName}</strong> was already registered on <strong className="font-semibold text-slate-900">{duplicateConflict.invoiceDate}</strong> for <strong className="font-semibold text-slate-900">{currency(Number(duplicateConflict.totalAmount))}</strong>.
+                </p>
+                <p className="mt-2 text-slate-600">
+                  Would you like to update this existing invoice with the current products, pricing, and quantities? Updating preserves the original creation audit trail while recalculating inventory quantities and stock movements.
+                </p>
+              </div>
+
+              <div className="mt-6 flex items-center justify-end gap-3">
+                <Button
+                  variant="secondary"
+                  disabled={saving}
+                  onClick={() => setDuplicateConflict(null)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  disabled={saving}
+                  onClick={() => handleConfirmSave(true)}
+                >
+                  <Icon name="refresh" size={16} />
+                  {saving ? "Updating invoice…" : "Update Existing Invoice"}
+                </Button>
+              </div>
+            </div>
+          </Card>
+        </div>
+      )}
     </>
   );
 }
 
-function PurchasesScreen({ onNavigate }: { onNavigate: (page: string) => void }) {
+function InvoicesScreen({ onNavigate }: { onNavigate: (page: string) => void }) {
   const [invoices, setInvoices] = useState<PurchaseInvoiceDto[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
+  const [selectedInvoice, setSelectedInvoice] = useState<PurchaseInvoiceDetailDto | null>(null);
+  const [loadingDetail, setLoadingDetail] = useState(false);
+  const [detailError, setDetailError] = useState("");
+  const [billModalData, setBillModalData] = useState<{ url: string; title: string; isPdf: boolean } | null>(null);
+  const [loadingBill, setLoadingBill] = useState(false);
 
   const loadInvoices = () => {
     setLoading(true);
@@ -1489,6 +2338,48 @@ function PurchasesScreen({ onNavigate }: { onNavigate: (page: string) => void })
         setLoading(false);
       })
       .catch(() => setLoading(false));
+  };
+
+  const handleViewBillImage = async (invoiceId: string, invoiceNum: string) => {
+    setLoadingBill(true);
+    try {
+      const { blob, contentType } = await fetchInvoiceFileBlob(invoiceId);
+      const objectUrl = URL.createObjectURL(blob);
+      const isPdf = contentType.includes("pdf") || blob.type.includes("pdf");
+      setBillModalData({
+        url: objectUrl,
+        title: `Bill for Invoice ${invoiceNum}`,
+        isPdf,
+      });
+    } catch (err: unknown) {
+      alert("Unable to load original invoice bill file.");
+    } finally {
+      setLoadingBill(false);
+    }
+  };
+
+  const handleCloseBillModal = () => {
+    if (billModalData?.url) {
+      URL.revokeObjectURL(billModalData.url);
+    }
+    setBillModalData(null);
+  };
+
+  const handleOpenDetail = async (id: string) => {
+    setLoadingDetail(true);
+    setDetailError("");
+    try {
+      const data = await fetchPurchaseInvoiceById(id);
+      setSelectedInvoice(data);
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        setDetailError(err.message);
+      } else {
+        setDetailError("Failed to fetch invoice details.");
+      }
+    } finally {
+      setLoadingDetail(false);
+    }
   };
 
   useEffect(() => {
@@ -1511,25 +2402,25 @@ function PurchasesScreen({ onNavigate }: { onNavigate: (page: string) => void })
   return (
     <>
       <PageHeader
-        title="Purchases"
-        description="Track your real supplier bills, line items, and invoice totals."
+        title="Invoices"
+        description="All recorded supplier purchase invoices, items, and audit history."
         actions={
-          <>
-            <Button variant="secondary" onClick={loadInvoices}>
+          <div className="flex items-center gap-2 w-full sm:w-auto">
+            <Button variant="secondary" className="flex-1 sm:flex-initial text-xs sm:text-sm" onClick={loadInvoices}>
               <Icon name="refresh" size={16} />
               Refresh
             </Button>
-            <Button onClick={() => onNavigate("Invoice Scanner")}>
+            <Button className="flex-1 sm:flex-initial text-xs sm:text-sm" onClick={() => onNavigate("Invoice Scanner")}>
               <Icon name="scan" size={16} />
               Scan New Invoice
             </Button>
-          </>
+          </div>
         }
       />
       <div className="grid gap-3 sm:grid-cols-3 mb-4">
-        <MetricCard title="Total Purchase Invoices" value={String(invoices.length)} meta="Inward bills logged" icon="cart" tone="blue" />
-        <MetricCard title="Total Spend" value={currency(totalSpent)} meta="Cumulative purchase value" icon="report" tone="emerald" />
-        <MetricCard title="Total Items Inwarded" value={String(totalItems)} meta="Stock units received" icon="box" />
+        <MetricCard title="Total Purchase Invoices" value={String(invoices.length)} meta="Recorded in ledger" icon="file" tone="blue" />
+        <MetricCard title="Total Inward Spend" value={currency(totalSpent)} meta="Cumulative purchase value" icon="report" tone="emerald" />
+        <MetricCard title="Total Products Inwarded" value={String(totalItems)} meta="Stock units received" icon="box" />
       </div>
       <Card>
         <div className="flex gap-3 border-b border-slate-100 p-4">
@@ -1548,10 +2439,10 @@ function PurchasesScreen({ onNavigate }: { onNavigate: (page: string) => void })
         ) : filtered.length === 0 ? (
           <div className="grid place-items-center py-20 text-center">
             <span className="grid size-12 place-items-center rounded-full bg-slate-100 text-slate-400">
-              <Icon name="cart" />
+              <Icon name="file" />
             </span>
             <h3 className="mt-3 font-bold text-slate-800">No purchase invoices found</h3>
-            <p className="mt-1 text-sm text-slate-500">Scan your first supplier bill using the Invoice Scanner.</p>
+            <p className="mt-1 text-sm text-slate-500">Scan or add your first supplier bill using the Invoice Scanner.</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -1564,18 +2455,41 @@ function PurchasesScreen({ onNavigate }: { onNavigate: (page: string) => void })
                   <th className="px-5 py-3 font-semibold">Items</th>
                   <th className="px-5 py-3 font-semibold">Total Amount</th>
                   <th className="px-5 py-3 font-semibold">Status</th>
+                  <th className="px-5 py-3 font-semibold text-right">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filtered.map(inv => (
-                  <tr className="hover:bg-slate-50" key={inv.id}>
-                    <td className="px-5 py-4 font-semibold text-slate-800">{inv.invoiceNumber}</td>
+                  <tr className="hover:bg-slate-50 transition cursor-pointer" key={inv.id} onClick={() => handleOpenDetail(inv.id)}>
+                    <td className="px-5 py-4 font-semibold text-emerald-700">{inv.invoiceNumber}</td>
                     <td className="px-5 py-4 text-slate-700">{inv.supplierName}</td>
                     <td className="px-5 py-4 text-slate-500">{inv.invoiceDate}</td>
                     <td className="px-5 py-4 font-medium text-slate-600">{inv.itemsCount} items</td>
                     <td className="px-5 py-4 font-bold text-slate-900">{currency(Number(inv.totalAmount))}</td>
                     <td className="px-5 py-4">
-                      <Badge tone={inv.status === "COMPLETED" ? "success" : "info"}>{inv.status}</Badge>
+                      <Badge tone={inv.status === "COMPLETED" || inv.status === "POSTED" ? "success" : "info"}>{inv.status}</Badge>
+                    </td>
+                    <td className="px-5 py-4 text-right">
+                      <div className="flex items-center justify-end gap-1.5">
+                        {inv.sourceFileUrl && (
+                          <Button
+                            variant="secondary"
+                            className="text-xs px-2.5 py-1 text-slate-700"
+                            disabled={loadingBill}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleViewBillImage(inv.id, inv.invoiceNumber);
+                            }}
+                            title="View original scanned invoice document"
+                          >
+                            <Icon name="file" size={14} />
+                            Bill Image
+                          </Button>
+                        )}
+                        <Button variant="ghost" className="text-xs px-2.5 py-1" onClick={(e) => { e.stopPropagation(); handleOpenDetail(inv.id); }}>
+                          Details
+                        </Button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -1584,6 +2498,202 @@ function PurchasesScreen({ onNavigate }: { onNavigate: (page: string) => void })
           </div>
         )}
       </Card>
+
+      {selectedInvoice && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm"
+          onMouseDown={() => setSelectedInvoice(null)}
+        >
+          <Card className="max-h-[90vh] w-full max-w-3xl overflow-hidden shadow-2xl flex flex-col">
+            <div onMouseDown={(e) => e.stopPropagation()} className="flex flex-col max-h-[90vh]">
+              <div className="flex items-center justify-between border-b border-slate-100 p-4">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-bold text-slate-900">Invoice {selectedInvoice.invoiceNumber}</h3>
+                    <Badge tone="success">{selectedInvoice.status}</Badge>
+                  </div>
+                  <p className="text-xs text-slate-500">{selectedInvoice.supplierName} • {selectedInvoice.invoiceDate}</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {selectedInvoice.sourceFileUrl && (
+                    <Button
+                      variant="secondary"
+                      className="text-xs px-3 py-1.5"
+                      disabled={loadingBill}
+                      onClick={() => handleViewBillImage(selectedInvoice.id, selectedInvoice.invoiceNumber)}
+                    >
+                      <Icon name="file" size={14} />
+                      View Original Bill
+                    </Button>
+                  )}
+                  <Button variant="ghost" onClick={() => setSelectedInvoice(null)}>
+                    <Icon name="close" size={16} />
+                  </Button>
+                </div>
+              </div>
+
+              <div className="overflow-y-auto p-5 space-y-4 text-xs">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-3.5 rounded-xl border border-slate-200">
+                  <div>
+                    <span className="text-slate-400 block">Supplier</span>
+                    <strong className="text-slate-800">{selectedInvoice.supplierName}</strong>
+                    {selectedInvoice.supplierGstin && <p className="text-[10px] text-slate-500 font-mono">GSTIN: {selectedInvoice.supplierGstin}</p>}
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block">Invoice Date</span>
+                    <strong className="text-slate-800">{selectedInvoice.invoiceDate}</strong>
+                    {selectedInvoice.paymentMode && <p className="text-[10px] text-slate-500">Mode: {selectedInvoice.paymentMode}</p>}
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block">Created Timestamp</span>
+                    <strong className="text-slate-800">{new Date(selectedInvoice.createdAt).toLocaleString()}</strong>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block">Total Amount</span>
+                    <strong className="text-emerald-700 text-sm font-extrabold">{currency(Number(selectedInvoice.totalAmount))}</strong>
+                  </div>
+                </div>
+
+                <div>
+                  <h4 className="font-bold text-slate-800 mb-2">Invoice Line Items ({selectedInvoice.items.length})</h4>
+                  <div className="border border-slate-200 rounded-xl overflow-hidden">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-100/70 text-slate-500 uppercase text-[10px]">
+                        <tr>
+                          <th className="p-2.5">Item</th>
+                          <th className="p-2.5">Qty</th>
+                          <th className="p-2.5">Unit Cost</th>
+                          <th className="p-2.5">Discount</th>
+                          <th className="p-2.5">GST</th>
+                          <th className="p-2.5 text-right">Line Total</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {selectedInvoice.items.map((it) => (
+                          <tr key={it.id}>
+                            <td className="p-2.5">
+                              <p className="font-semibold text-slate-800">{it.productName}</p>
+                              {it.sku && <span className="text-[10px] text-slate-400 font-mono">SKU: {it.sku}</span>}
+                            </td>
+                            <td className="p-2.5">{it.quantity}</td>
+                            <td className="p-2.5">{currency(Number(it.unitCost))}</td>
+                            <td className="p-2.5 text-slate-500">{it.discountAmount ? currency(Number(it.discountAmount)) : "-"}</td>
+                            <td className="p-2.5 text-slate-500">{it.taxRate ? `${it.taxRate}%` : "-"}</td>
+                            <td className="p-2.5 font-bold text-slate-900 text-right">{currency(Number(it.lineTotal))}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div className="flex justify-end pt-2 text-xs">
+                  <div className="space-y-1 text-right min-w-[200px]">
+                    <div className="flex justify-between text-slate-500">
+                      <span>Subtotal:</span>
+                      <span>{currency(Number(selectedInvoice.subtotal))}</span>
+                    </div>
+                    <div className="flex justify-between text-slate-500">
+                      <span>Tax Amount:</span>
+                      <span>{currency(Number(selectedInvoice.taxAmount))}</span>
+                    </div>
+                    <div className="flex justify-between font-bold text-slate-900 border-t border-slate-200 pt-1 text-sm">
+                      <span>Grand Total:</span>
+                      <span className="text-emerald-700">{currency(Number(selectedInvoice.totalAmount))}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between border-t border-slate-100 p-3 bg-slate-50">
+                <div>
+                  {selectedInvoice.sourceFileUrl ? (
+                    <span className="text-[11px] text-emerald-700 font-medium flex items-center gap-1">
+                      <Icon name="check" size={14} />
+                      Original Bill Image Attached
+                    </span>
+                  ) : (
+                    <span className="text-[11px] text-slate-400">No original bill image uploaded</span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  {selectedInvoice.sourceFileUrl && (
+                    <Button
+                      variant="secondary"
+                      disabled={loadingBill}
+                      onClick={() => handleViewBillImage(selectedInvoice.id, selectedInvoice.invoiceNumber)}
+                    >
+                      <Icon name="file" size={15} />
+                      View Bill
+                    </Button>
+                  )}
+                  <Button variant="secondary" onClick={() => setSelectedInvoice(null)}>
+                    Close
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {billModalData && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm"
+          onMouseDown={handleCloseBillModal}
+        >
+          <Card className="max-h-[92vh] w-full max-w-4xl overflow-hidden shadow-2xl flex flex-col">
+            <div onMouseDown={(e) => e.stopPropagation()} className="flex flex-col max-h-[92vh]">
+              <div className="flex items-center justify-between border-b border-slate-100 p-4">
+                <div className="flex items-center gap-2">
+                  <span className="grid size-8 place-items-center rounded-lg bg-emerald-100 text-emerald-800">
+                    <Icon name="file" size={16} />
+                  </span>
+                  <div>
+                    <h3 className="font-bold text-slate-900">{billModalData.title}</h3>
+                    <p className="text-xs text-slate-500 font-medium">Secured bill preview</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <a
+                    href={billModalData.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50"
+                  >
+                    Open Fullscreen
+                  </a>
+                  <Button variant="ghost" onClick={handleCloseBillModal}>
+                    <Icon name="close" size={16} />
+                  </Button>
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-auto bg-slate-900/5 p-4 flex items-center justify-center min-h-[350px]">
+                {billModalData.isPdf ? (
+                  <iframe
+                    src={billModalData.url}
+                    className="w-full h-[70vh] rounded-lg border border-slate-200 bg-white"
+                    title="Invoice PDF"
+                  />
+                ) : (
+                  <img
+                    src={billModalData.url}
+                    alt="Original Invoice Bill"
+                    className="max-h-[72vh] max-w-full rounded-lg object-contain shadow-md border border-slate-200 bg-white"
+                  />
+                )}
+              </div>
+
+              <div className="flex justify-end border-t border-slate-100 p-3 bg-slate-50">
+                <Button variant="secondary" onClick={handleCloseBillModal}>
+                  Close
+                </Button>
+              </div>
+            </div>
+          </Card>
+        </div>
+      )}
     </>
   );
 }
@@ -1649,16 +2759,16 @@ function SuppliersScreen() {
         title="Suppliers"
         description="View your active suppliers, GSTIN numbers, contact details, and historical spend."
         actions={
-          <>
-            <Button variant="secondary" onClick={loadSuppliers}>
+          <div className="flex items-center gap-2 w-full sm:w-auto">
+            <Button variant="secondary" className="flex-1 sm:flex-initial text-xs sm:text-sm" onClick={loadSuppliers}>
               <Icon name="refresh" size={16} />
               Refresh
             </Button>
-            <Button onClick={() => setShowAddModal(true)}>
+            <Button className="flex-1 sm:flex-initial text-xs sm:text-sm" onClick={() => setShowAddModal(true)}>
               <Icon name="plus" size={16} />
               Add Supplier
             </Button>
-          </>
+          </div>
         }
       />
       <div className="grid gap-3 sm:grid-cols-3 mb-4">
@@ -1721,11 +2831,11 @@ function SuppliersScreen() {
       </Card>
 
       {showAddModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm" onMouseDown={() => setShowAddModal(false)}>
-          <Card className="w-full max-w-md shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-950/40 p-0 sm:p-4 backdrop-blur-sm" onMouseDown={() => setShowAddModal(false)}>
+          <Card className="w-full max-w-md rounded-t-2xl sm:rounded-xl shadow-2xl overflow-hidden">
             <div onMouseDown={e => e.stopPropagation()}>
-              <div className="flex items-center justify-between border-b border-slate-100 p-5">
-                <h2 className="text-lg font-bold text-slate-900">Add New Supplier</h2>
+              <div className="flex items-center justify-between border-b border-slate-100 p-4 sm:p-5">
+                <h2 className="text-base sm:text-lg font-bold text-slate-900">Add New Supplier</h2>
                 <Button variant="ghost" onClick={() => setShowAddModal(false)}>
                   <Icon name="close" />
                 </Button>
@@ -1781,7 +2891,70 @@ function AIAssistant() {
   const [messages, setMessages] = useState([{ role: "ai", text: "Hello Amit. I can analyse your inventory, purchases and product movement. What would you like to know?" }]);
   const [value, setValue] = useState("");
   const ask = (text: string) => { if(!text.trim()) return; setMessages(m=>[...m,{role:"user",text},{role:"ai",text:"Based on the last 30 days, Aashirvaad Atta and Surf Excel need attention first. At current sales velocity, they may stock out within 6 and 4 days. Reordering 42 and 36 units respectively would provide roughly two weeks of cover."}]); setValue(""); };
-  return <><PageHeader title="AI Assistant" description="Ask evidence-based questions about your inventory." /><Card className="grid min-h-[650px] overflow-hidden lg:grid-cols-[260px_1fr]"><aside className="border-b border-slate-200 bg-slate-50 p-4 lg:border-b-0 lg:border-r"><Button className="w-full"><Icon name="plus" size={15} />New conversation</Button><p className="mt-6 px-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">Suggested questions</p><div className="mt-2 space-y-2">{["What should I reorder this week?","Which items are hurting margin?","Show my dead stock risk","Compare supplier prices"].map(q=><button className="w-full rounded-lg border border-slate-200 bg-white p-3 text-left text-xs font-medium leading-5 text-slate-600 hover:border-emerald-300 hover:text-emerald-700" key={q} onClick={()=>ask(q)}>{q}</button>)}</div></aside><div className="flex min-w-0 flex-col"><div className="flex-1 space-y-5 overflow-y-auto p-5 sm:p-8">{messages.map((m,i)=><div className={`flex gap-3 ${m.role==="user" ? "justify-end" : ""}`} key={i}>{m.role==="ai" && <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-emerald-600 text-white"><Icon name="spark" size={16} /></span>}<div className={`max-w-2xl rounded-xl px-4 py-3 text-sm leading-6 ${m.role==="user" ? "bg-slate-900 text-white" : "border border-slate-200 bg-white text-slate-700"}`}>{m.text}{m.role==="ai" && i>0 && <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-100 pt-3"><Badge tone="info">Sales: last 30 days</Badge><Badge tone="success">Inventory: live mock data</Badge></div>}</div></div>)}</div><div className="border-t border-slate-100 p-4"><div className="flex gap-2"><Input placeholder="Ask about stock, margins or suppliers…" value={value} onChange={e=>setValue(e.target.value)} onKeyDown={e=>e.key==="Enter"&&ask(value)} /><Button onClick={()=>ask(value)}><Icon name="send" size={16} /><span className="hidden sm:inline">Ask</span></Button></div><p className="mt-2 text-center text-[10px] text-slate-400">Responses use simulated prototype data and may not reflect real inventory.</p></div></div></Card></>;
+  return (
+    <>
+      <PageHeader
+        title="AI Assistant"
+        description="Ask evidence-based questions about your inventory."
+        actions={<Button className="text-xs sm:text-sm" onClick={() => setMessages([{ role: "ai", text: "Hello Amit. What inventory questions can I help with today?" }])}><Icon name="plus" size={15} />New conversation</Button>}
+      />
+      <Card className="grid min-h-[550px] sm:min-h-[650px] overflow-hidden lg:grid-cols-[260px_1fr]">
+        <aside className="border-b border-slate-200 bg-slate-50 p-3 sm:p-4 lg:border-b-0 lg:border-r">
+          <p className="px-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">Suggested questions</p>
+          <div className="mt-2 flex lg:flex-col gap-2 overflow-x-auto pb-1 lg:pb-0">
+            {["What should I reorder this week?", "Which items are hurting margin?", "Show my dead stock risk", "Compare supplier prices"].map(q => (
+              <button
+                className="shrink-0 lg:w-full rounded-lg border border-slate-200 bg-white p-2.5 sm:p-3 text-left text-xs font-medium leading-snug text-slate-600 hover:border-emerald-300 hover:text-emerald-700 whitespace-nowrap lg:whitespace-normal"
+                key={q}
+                onClick={() => ask(q)}
+              >
+                {q}
+              </button>
+            ))}
+          </div>
+        </aside>
+        <div className="flex min-w-0 flex-col">
+          <div className="flex-1 space-y-4 overflow-y-auto p-4 sm:p-8">
+            {messages.map((m, i) => (
+              <div className={`flex gap-2.5 sm:gap-3 ${m.role === "user" ? "justify-end" : ""}`} key={i}>
+                {m.role === "ai" && (
+                  <span className="grid size-7 sm:size-8 shrink-0 place-items-center rounded-lg bg-emerald-600 text-white">
+                    <Icon name="spark" size={15} />
+                  </span>
+                )}
+                <div className={`max-w-2xl rounded-xl px-3.5 py-2.5 sm:px-4 sm:py-3 text-xs sm:text-sm leading-relaxed ${m.role === "user" ? "bg-slate-900 text-white" : "border border-slate-200 bg-white text-slate-700"}`}>
+                  {m.text}
+                  {m.role === "ai" && i > 0 && (
+                    <div className="mt-2.5 flex flex-wrap gap-1.5 border-t border-slate-100 pt-2.5">
+                      <Badge tone="info">Sales: last 30 days</Badge>
+                      <Badge tone="success">Inventory: live mock data</Badge>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="border-t border-slate-100 p-3 sm:p-4">
+            <div className="flex gap-2">
+              <Input
+                placeholder="Ask about stock, margins or suppliers…"
+                value={value}
+                onChange={e => setValue(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && ask(value)}
+              />
+              <Button onClick={() => ask(value)}>
+                <Icon name="send" size={16} />
+                <span className="hidden sm:inline">Ask</span>
+              </Button>
+            </div>
+            <p className="mt-2 text-center text-[10px] text-slate-400">
+              Responses use simulated prototype data and may not reflect real inventory.
+            </p>
+          </div>
+        </div>
+      </Card>
+    </>
+  );
 }
 
 function Reports() {
@@ -1945,11 +3118,11 @@ function Settings({ user, onShopUpdated }: { user?: User | null; onShopUpdated?:
         description="Manage your business profile and inventory preferences."
       />
       <div className="grid gap-4 lg:grid-cols-[220px_1fr]">
-        <Card className="h-fit p-2">
+        <Card className="h-fit p-1.5 flex lg:flex-col overflow-x-auto gap-1">
           {["Business profile", "Inventory rules", "Tax & currency", "Notifications", "Team access"].map((tab) => (
             <button
-              className={`w-full rounded-lg px-3 py-2.5 text-left text-sm font-medium transition ${
-                activeTab === tab ? "bg-emerald-50 text-emerald-700" : "text-slate-600 hover:bg-slate-50"
+              className={`shrink-0 rounded-lg px-3 py-2 text-left text-xs sm:text-sm font-medium transition whitespace-nowrap lg:w-full ${
+                activeTab === tab ? "bg-emerald-50 text-emerald-700 font-bold" : "text-slate-600 hover:bg-slate-50"
               }`}
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -2453,9 +3626,26 @@ export default function App() {
   const [scannedProduct, setScannedProduct] = useState<ProductDetail | null>(null);
   const [qrModalProduct, setQrModalProduct] = useState<ProductDetail | null>(null);
 
+  const [printQueue, setPrintQueue] = useState<PrintQueueItem[]>(() => {
+    try {
+      const saved = localStorage.getItem("barcode_print_queue");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [showPrintModal, setShowPrintModal] = useState(false);
+
   useEffect(() => {
     localStorage.setItem("sidebar_open", String(sidebar));
   }, [sidebar]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("barcode_print_queue", JSON.stringify(printQueue));
+    } catch {
+    }
+  }, [printQueue]);
 
   useEffect(() => {
     if (getToken()) {
@@ -2471,6 +3661,51 @@ export default function App() {
         });
     }
   }, []);
+
+  const totalPrintQueueCount = useMemo(() => printQueue.reduce((acc, it) => acc + (it.quantity || 1), 0), [printQueue]);
+
+  const addToPrintQueue = (p: ProductDetail | any, qty: number = 1) => {
+    const sku = (p.sku || p.id || "").trim();
+    if (!sku) return;
+    setPrintQueue(prev => {
+      const existingIdx = prev.findIndex(item => item.sku === sku);
+      if (existingIdx >= 0) {
+        const next = [...prev];
+        next[existingIdx] = {
+          ...next[existingIdx],
+          quantity: next[existingIdx].quantity + Math.max(1, qty),
+        };
+        return next;
+      }
+      return [...prev, { sku, name: p.name || sku, quantity: Math.max(1, qty) }];
+    });
+  };
+
+  const updatePrintQueueQuantity = (sku: string, quantity: number) => {
+    setPrintQueue(prev =>
+      prev.map(item => (item.sku === sku ? { ...item, quantity: Math.max(1, quantity) } : item))
+    );
+  };
+
+  const removePrintQueueItem = (sku: string) => {
+    setPrintQueue(prev => prev.filter(item => item.sku !== sku));
+  };
+
+  const reorderPrintQueue = (fromIndex: number, toIndex: number) => {
+    setPrintQueue(prev => {
+      if (fromIndex < 0 || fromIndex >= prev.length || toIndex < 0 || toIndex >= prev.length) {
+        return prev;
+      }
+      const next = [...prev];
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
+      return next;
+    });
+  };
+
+  const clearPrintQueue = () => {
+    setPrintQueue([]);
+  };
 
   const openQrModal = (p: any) => {
     const detail: ProductDetail = {
@@ -2492,9 +3727,9 @@ export default function App() {
 
   const render = () => {
     if (active === "Overview") return <Overview onNavigate={setActive} user={currentUser} onShopCreated={(u) => setCurrentUser(u)} onShowQr={openQrModal} />;
-    if (active === "Products" || active === "Inventory") return <ProductsScreen onShowQr={openQrModal} onScanQr={() => setShowScanner(true)} />;
+    if (active === "Products" || active === "Inventory") return <ProductsScreen onShowQr={openQrModal} onScanQr={() => setShowScanner(true)} printQueueCount={totalPrintQueueCount} onOpenPrintModal={() => setShowPrintModal(true)} onAddToPrintQueue={addToPrintQueue} />;
     if (active === "Invoice Scanner") return <InvoiceScanner />;
-    if (active === "Purchases") return <PurchasesScreen onNavigate={setActive} />;
+    if (active === "Invoices" || active === "Purchases") return <InvoicesScreen onNavigate={setActive} />;
     if (active === "Suppliers") return <SuppliersScreen />;
     if (active === "AI Assistant") return <AIAssistant />;
     if (active === "Reports") return <Reports />;
@@ -2504,12 +3739,12 @@ export default function App() {
 
   if (!authenticated) return <AuthScreen onAuthenticated={(user) => { setCurrentUser(user); setAuthenticated(true); }} />;
 
-  return <div className="min-h-screen bg-slate-50 text-slate-700">
+  return <div className="min-h-screen bg-slate-50 text-slate-700 w-full max-w-full overflow-x-hidden">
     <Sidebar active={active} onNavigate={setActive} open={sidebar} onClose={() => setSidebar(false)} onLogout={() => { logout(); setCurrentUser(null); setAuthenticated(false); setSidebar(false); }} user={currentUser} />
     {sidebar && <button aria-label="Close sidebar" className="fixed inset-0 z-30 bg-slate-950/30 lg:hidden" onClick={() => setSidebar(false)} />}
-    <div className={`transition-[padding] duration-200 ${sidebar ? "lg:pl-64" : "pl-0"}`}>
-      <Header onMenu={() => setSidebar(prev => !prev)} onNavigate={setActive} sidebarOpen={sidebar} onScanQr={() => setShowScanner(true)} />
-      <main className="mx-auto max-w-[1600px] p-4 sm:p-6">{render()}</main>
+    <div className={`transition-[padding] duration-200 ${sidebar ? "lg:pl-64" : "pl-0"} min-w-0 max-w-full overflow-x-hidden`}>
+      <Header onMenu={() => setSidebar(prev => !prev)} onNavigate={setActive} sidebarOpen={sidebar} onScanQr={() => setShowScanner(true)} printQueueCount={totalPrintQueueCount} onOpenPrintModal={() => setShowPrintModal(true)} />
+      <main className="mx-auto max-w-[1600px] p-3 sm:p-6 min-w-0 overflow-x-hidden">{render()}</main>
     </div>
 
     {showScanner && (
@@ -2537,6 +3772,18 @@ export default function App() {
       <QrCodeModal
         product={qrModalProduct}
         onClose={() => setQrModalProduct(null)}
+        onAddToPrintQueue={addToPrintQueue}
+      />
+    )}
+
+    {showPrintModal && (
+      <BarcodePrintModal
+        queue={printQueue}
+        onClose={() => setShowPrintModal(false)}
+        onUpdateQuantity={updatePrintQueueQuantity}
+        onRemoveItem={removePrintQueueItem}
+        onReorder={reorderPrintQueue}
+        onClearQueue={clearPrintQueue}
       />
     )}
   </div>;

@@ -83,3 +83,42 @@ export async function createProduct(payload: Partial<ProductDetail>): Promise<Pr
   return res.json();
 }
 
+export async function deleteProduct(id: string): Promise<void> {
+  const jwt = getToken();
+  const headers: HeadersInit = {};
+  if (jwt) {
+    headers["Authorization"] = `Bearer ${jwt}`;
+  }
+
+  const res = await fetch(`/api/products/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers,
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(err || `Failed to delete product (${res.status})`);
+  }
+}
+
+export async function deleteProductsBatch(productIds: string[]): Promise<{ deleted: number }> {
+  const jwt = getToken();
+  const headers: HeadersInit = { "Content-Type": "application/json" };
+  if (jwt) {
+    headers["Authorization"] = `Bearer ${jwt}`;
+  }
+
+  const res = await fetch("/api/products/batch-delete", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ productIds }),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(err || `Failed to batch delete products (${res.status})`);
+  }
+
+  return res.json();
+}
+

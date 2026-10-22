@@ -81,7 +81,29 @@ export interface SavePurchaseInvoicePayload {
   taxAmount: number;
   totalAmount: number;
   sourceFileUrl?: string;
+  updateExisting?: boolean;
   items: SavePurchaseInvoiceItemPayload[];
+}
+
+export interface DuplicateInvoiceConflictDetails {
+  conflict: boolean;
+  duplicateInvoice: boolean;
+  message: string;
+  existingInvoiceId: string;
+  invoiceNumber: string;
+  supplierName: string;
+  invoiceDate: string;
+  totalAmount: number;
+}
+
+export class DuplicateInvoiceError extends Error {
+  conflictDetails: DuplicateInvoiceConflictDetails;
+
+  constructor(details: DuplicateInvoiceConflictDetails) {
+    super(details.message || "Duplicate invoice found");
+    this.name = "DuplicateInvoiceError";
+    this.conflictDetails = details;
+  }
 }
 
 export interface PurchaseInvoiceDto {
@@ -93,11 +115,15 @@ export interface PurchaseInvoiceDto {
   status: string;
   itemsCount: number;
   createdAt: string;
+  sourceFileUrl?: string;
 }
 
 async function handleResponse<T>(response: Response): Promise<T> {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
+    if (response.status === 409 && data && data.duplicateInvoice) {
+      throw new DuplicateInvoiceError(data as DuplicateInvoiceConflictDetails);
+    }
     const errorMsg = data.message || `Request failed with status ${response.status}`;
     throw new Error(errorMsg);
   }
@@ -144,6 +170,54 @@ export async function savePurchaseInvoice(payload: SavePurchaseInvoicePayload): 
   return handleResponse<PurchaseInvoiceDto>(response);
 }
 
+export interface PurchaseInvoiceItemDto {
+  id: string;
+  productId?: string;
+  productName: string;
+  sku?: string;
+  description: string;
+  quantity: number;
+  unitCost: number;
+  discountAmount?: number;
+  taxRate?: number;
+  taxAmount?: number;
+  lineTotal: number;
+}
+
+export interface PurchaseInvoiceDetailDto {
+  id: string;
+  invoiceNumber: string;
+  invoiceDate: string;
+  supplierName: string;
+  supplierGstin?: string;
+  supplierPhone?: string;
+  paymentMode?: string;
+  subtotal: number;
+  taxAmount: number;
+  totalAmount: number;
+  status: string;
+  sourceFileUrl?: string;
+  createdAt: string;
+  postedAt?: string;
+  items: PurchaseInvoiceItemDto[];
+}
+
+export async function fetchPurchaseInvoiceById(id: string): Promise<PurchaseInvoiceDetailDto> {
+  const token = getToken();
+  if (!token) {
+    throw new Error("You must be logged in to fetch invoice details.");
+  }
+
+  const response = await fetch(`/api/invoices/${id}`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  return handleResponse<PurchaseInvoiceDetailDto>(response);
+}
+
 export async function fetchPurchaseInvoices(): Promise<PurchaseInvoiceDto[]> {
   const token = getToken();
   if (!token) {
@@ -158,4 +232,26 @@ export async function fetchPurchaseInvoices(): Promise<PurchaseInvoiceDto[]> {
   });
 
   return handleResponse<PurchaseInvoiceDto[]>(response);
+}
+
+export async function fetchInvoiceFileBlob(invoiceId: string): Promise<{ blob: Blob; contentType: string }> {
+  const token = getToken();
+  if (!token) {
+    throw new Error("You must be logged in to access invoice files.");
+  }
+
+  const response = await fetch(`/api/invoices/${invoiceId}/file`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to load bill image (status: ${response.status})`);
+  }
+
+  const contentType = response.headers.get("content-type") || "image/png";
+  const blob = await response.blob();
+  return { blob, contentType };
 }

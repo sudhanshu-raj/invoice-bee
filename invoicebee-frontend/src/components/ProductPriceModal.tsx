@@ -54,9 +54,9 @@ export const ProductPriceModal: React.FC<ProductPriceModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">
-      <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-        <div className="border-b border-slate-100 bg-slate-50/70 p-5">
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 p-0 sm:p-4 backdrop-blur-sm">
+      <div className="w-full max-w-lg rounded-t-2xl sm:rounded-2xl border border-slate-200 bg-white shadow-2xl overflow-hidden max-h-[92vh] sm:max-h-[85vh] flex flex-col animate-in fade-in zoom-in-95 duration-150">
+        <div className="border-b border-slate-100 bg-slate-50/70 p-4 sm:p-5">
           <div className="flex items-start justify-between gap-3">
             <div>
               <div className="flex items-center gap-2">
@@ -67,7 +67,7 @@ export const ProductPriceModal: React.FC<ProductPriceModalProps> = ({
                   {product.sku}
                 </span>
               </div>
-              <h2 className="mt-1.5 text-lg font-bold text-slate-900 leading-snug">
+              <h2 className="mt-1.5 text-base sm:text-lg font-bold text-slate-900 leading-snug">
                 {product.name}
               </h2>
             </div>
@@ -80,24 +80,26 @@ export const ProductPriceModal: React.FC<ProductPriceModalProps> = ({
             </button>
           </div>
 
-          <div className="mt-4 flex gap-1 rounded-xl bg-slate-200/70 p-1">
+          <div className="mt-3 sm:mt-4 grid grid-cols-3 gap-1 rounded-xl bg-slate-200/70 p-1">
             <button
               type="button"
-              className={`flex-1 rounded-lg py-1.5 text-xs font-bold transition ${tab === "price" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"}`}
+              className={`rounded-lg py-2 px-1 text-center text-xs font-bold transition ${tab === "price" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"}`}
               onClick={() => setTab("price")}
             >
-              Pricing & Stock
+              <span className="sm:hidden">Pricing</span>
+              <span className="hidden sm:inline">Pricing & Stock</span>
             </button>
             <button
               type="button"
-              className={`flex-1 rounded-lg py-1.5 text-xs font-bold transition ${tab === "details" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"}`}
+              className={`rounded-lg py-2 px-1 text-center text-xs font-bold transition ${tab === "details" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"}`}
               onClick={() => setTab("details")}
             >
-              More Details
+              <span className="sm:hidden">Details</span>
+              <span className="hidden sm:inline">More Details</span>
             </button>
             <button
               type="button"
-              className={`flex-1 rounded-lg py-1.5 text-xs font-bold transition ${tab === "ai" ? "bg-white text-emerald-800 shadow-sm" : "text-slate-600 hover:text-slate-900"}`}
+              className={`rounded-lg py-2 px-1 text-center text-xs font-bold transition ${tab === "ai" ? "bg-white text-emerald-800 shadow-sm" : "text-slate-600 hover:text-slate-900"}`}
               onClick={() => {
                 setTab("ai");
                 if (!webIntelligence && !loadingWeb) {
@@ -105,12 +107,13 @@ export const ProductPriceModal: React.FC<ProductPriceModalProps> = ({
                 }
               }}
             >
-              AI & Search
+              <span className="sm:hidden">AI & Web</span>
+              <span className="hidden sm:inline">AI & Search</span>
             </button>
           </div>
         </div>
 
-        <div className="max-h-[60vh] overflow-y-auto p-5 space-y-4">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4">
           {tab === "price" && (
             <>
               <div className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-4">
@@ -240,21 +243,21 @@ export const ProductPriceModal: React.FC<ProductPriceModalProps> = ({
                   className="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-800 hover:bg-emerald-100"
                   onClick={() => handleAskAi("Give me an engaging 2-sentence sales pitch for this product to say to the customer.")}
                 >
-                  ⚡ Pitch to Customer
+                  Pitch to Customer
                 </button>
                 <button
                   type="button"
                   className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
                   onClick={() => handleAskAi("What are the key benefits, ingredients/materials, and uses of this item?")}
                 >
-                  🔍 Key Benefits & Uses
+                  Key Benefits & Uses
                 </button>
                 <button
                   type="button"
                   className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
                   onClick={() => handleAskAi("What is the typical Indian market retail price range and standard packaging for this?")}
                 >
-                  💰 Market Price & Packaging
+                  Market Price & Packaging
                 </button>
               </div>
 
@@ -270,7 +273,7 @@ export const ProductPriceModal: React.FC<ProductPriceModalProps> = ({
                 <button
                   type="button"
                   disabled={loadingAi || !aiQuestion.trim()}
-                  className="rounded-xl bg-emerald-600 px-3.5 py-2 text-xs font-bold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50"
+                  className="rounded-xl bg-emerald-600 px-3.5 py-2 text-xs font-bold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50 shrink-0"
                   onClick={() => handleAskAi()}
                 >
                   {loadingAi ? "Thinking..." : "Ask AI"}
@@ -314,24 +317,22 @@ export const ProductPriceModal: React.FC<ProductPriceModalProps> = ({
           )}
         </div>
 
-        <div className="flex items-center justify-between border-t border-slate-100 bg-slate-50/70 p-4">
+        <div className="flex items-center justify-between gap-2 border-t border-slate-100 bg-slate-50/70 p-3.5 sm:p-4">
           <button
             type="button"
-            className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-50"
+            className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-50"
             onClick={() => onShowQr(product)}
           >
-            <span>View / Print QR Code</span>
+            <span>View / Print Barcode</span>
           </button>
 
-          <div className="flex gap-2">
-            <button
-              type="button"
-              className="rounded-xl bg-slate-900 px-4 py-2 text-xs font-bold text-white shadow hover:bg-slate-800"
-              onClick={onClose}
-            >
-              Done
-            </button>
-          </div>
+          <button
+            type="button"
+            className="flex-1 sm:flex-none rounded-xl bg-slate-900 px-5 py-2 text-xs font-bold text-white shadow hover:bg-slate-800 text-center"
+            onClick={onClose}
+          >
+            Done
+          </button>
         </div>
       </div>
     </div>

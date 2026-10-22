@@ -18,3 +18,16 @@
 **/.DS_Store
 Thumbs.db
 *.log
+
+**/uploads/
+uploads/
+
+*.jpeg
+*.jpg
+*.png
+*.webp
+*.mov
+*.mp4
+
+**/src/main/resources/test/
+**/src/test/resources/

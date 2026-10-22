@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Html5Qrcode } from "html5-qrcode";
+import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
 import { fetchProductByQr, ProductDetail } from "../services/product";
 
 interface QrScannerModalProps {
@@ -52,7 +52,20 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
     setError("");
     try {
       if (!scannerRef.current) {
-        scannerRef.current = new Html5Qrcode("qr-reader-container");
+        scannerRef.current = new Html5Qrcode("qr-reader-container", {
+          formatsToSupport: [
+            Html5QrcodeSupportedFormats.CODE_128,
+            Html5QrcodeSupportedFormats.EAN_13,
+            Html5QrcodeSupportedFormats.UPC_A,
+            Html5QrcodeSupportedFormats.UPC_E,
+            Html5QrcodeSupportedFormats.CODE_39,
+            Html5QrcodeSupportedFormats.CODE_93,
+            Html5QrcodeSupportedFormats.CODABAR,
+            Html5QrcodeSupportedFormats.ITF,
+            Html5QrcodeSupportedFormats.QR_CODE,
+          ],
+          verbose: false,
+        });
       }
 
       if (scannerRef.current.isScanning) {
@@ -60,8 +73,8 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
       }
 
       const config = {
-        fps: 10,
-        qrbox: { width: 220, height: 220 },
+        fps: 15,
+        qrbox: { width: 250, height: 130 },
       };
 
       await scannerRef.current.start(
@@ -175,12 +188,12 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
   }, []);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">
-      <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 p-0 sm:p-4 backdrop-blur-sm">
+      <div className="w-full max-w-md rounded-t-2xl sm:rounded-2xl border border-slate-200 bg-white p-4 sm:p-6 shadow-2xl overflow-hidden max-h-[92vh] sm:max-h-none flex flex-col animate-in fade-in zoom-in-95 duration-150">
         <div className="flex items-center justify-between border-b border-slate-100 pb-3">
           <div>
-            <h3 className="text-base font-bold text-slate-900">Scan Product QR Code</h3>
-            <p className="text-xs text-slate-500">Scan to fetch pricing, margin & inventory</p>
+            <h3 className="text-sm sm:text-base font-bold text-slate-900">Scan Product Barcode</h3>
+            <p className="text-xs text-slate-500">Scan packaging barcode to fetch pricing, margin & inventory</p>
           </div>
           <button
             type="button"
@@ -192,13 +205,13 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
         </div>
 
         {error && (
-          <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs font-medium text-rose-700">
+          <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs font-medium text-rose-700">
             {error}
           </div>
         )}
 
-        <div className="my-4 flex flex-col items-center">
-          <div className="relative size-[260px] overflow-hidden rounded-2xl border-2 border-dashed border-emerald-500 bg-slate-900">
+        <div className="my-3 sm:my-4 flex flex-col items-center">
+          <div className="relative h-[180px] w-full max-w-[280px] overflow-hidden rounded-2xl border-2 border-dashed border-emerald-500 bg-slate-900">
             <div id="qr-reader-container" className="size-full" />
 
             {!cameraActive && !loading && (
@@ -240,7 +253,7 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
               className="rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100"
               onClick={() => fileInputRef.current?.click()}
             >
-              Upload QR Image File
+              Upload Barcode Image File
             </button>
           </div>
 
@@ -255,7 +268,7 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
             <input
               type="text"
               className="flex-1 rounded-xl border border-slate-200 px-3 py-2 text-xs font-medium text-slate-800 placeholder-slate-400 outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
-              placeholder="Enter SKU or QR UUID code"
+              placeholder="Enter SKU or barcode number"
               value={manualCode}
               onChange={(e) => setManualCode(e.target.value)}
             />

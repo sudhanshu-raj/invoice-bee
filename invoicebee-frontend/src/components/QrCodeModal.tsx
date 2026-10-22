@@ -1,15 +1,52 @@
-import React, { useRef } from "react";
-import { QRCodeSVG } from "qrcode.react";
+import React, { useEffect, useRef, useState } from "react";
+import JsBarcode from "jsbarcode";
 import { ProductDetail } from "../services/product";
 
 interface QrCodeModalProps {
   product: ProductDetail;
   onClose: () => void;
+  onAddToPrintQueue?: (product: ProductDetail) => void;
 }
 
-export const QrCodeModal: React.FC<QrCodeModalProps> = ({ product, onClose }) => {
+export const QrCodeModal: React.FC<QrCodeModalProps> = ({ product, onClose, onAddToPrintQueue }) => {
+  const barcodeRef = useRef<SVGSVGElement>(null);
   const printRef = useRef<HTMLDivElement>(null);
-  const qrValue = product.qrToken || product.sku || product.id;
+  const [added, setAdded] = useState(false);
+  const skuValue = (product.sku || product.id || "").trim();
+
+  useEffect(() => {
+    if (barcodeRef.current && skuValue) {
+      try {
+        JsBarcode(barcodeRef.current, skuValue, {
+          format: "CODE128",
+          width: 2,
+          height: 68,
+          displayValue: true,
+          font: "monospace",
+          fontSize: 14,
+          textMargin: 6,
+          margin: 10,
+          background: "#ffffff",
+          lineColor: "#000000",
+        });
+      } catch (err) {
+        try {
+          JsBarcode(barcodeRef.current, skuValue, {
+            width: 2,
+            height: 68,
+            displayValue: true,
+            font: "monospace",
+            fontSize: 14,
+            textMargin: 6,
+            margin: 10,
+            background: "#ffffff",
+            lineColor: "#000000",
+          });
+        } catch (ignored) {
+        }
+      }
+    }
+  }, [skuValue]);
 
   const handlePrint = () => {
     if (!printRef.current) return;
@@ -19,7 +56,7 @@ export const QrCodeModal: React.FC<QrCodeModalProps> = ({ product, onClose }) =>
     printWindow.document.write(`
       <html>
         <head>
-          <title>Print Label - ${product.sku}</title>
+          <title>Print Barcode - ${skuValue}</title>
           <style>
             body {
               font-family: system-ui, -apple-system, sans-serif;
@@ -30,28 +67,13 @@ export const QrCodeModal: React.FC<QrCodeModalProps> = ({ product, onClose }) =>
               margin: 0;
             }
             .label {
-              border: 2px solid #000;
-              padding: 16px;
-              width: 260px;
+              padding: 8px;
               text-align: center;
-              border-radius: 8px;
+              display: inline-block;
             }
-            .name {
-              font-size: 14px;
-              font-weight: bold;
-              margin-bottom: 6px;
-            }
-            .sku {
-              font-size: 11px;
-              color: #555;
-              margin-bottom: 10px;
-            }
-            .scan-hint {
-              font-size: 10px;
-              color: #64748b;
-              margin-top: 8px;
-              letter-spacing: 0.05em;
-              text-transform: uppercase;
+            svg {
+              display: block;
+              margin: 0 auto;
             }
           </style>
         </head>
@@ -73,11 +95,11 @@ export const QrCodeModal: React.FC<QrCodeModalProps> = ({ product, onClose }) =>
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">
-      <div className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+      <div className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-5 sm:p-6 shadow-2xl">
         <div className="flex items-center justify-between border-b border-slate-100 pb-3">
           <div>
-            <h3 className="text-base font-bold text-slate-900">Product QR Sticker</h3>
-            <p className="text-xs text-slate-500">Scan to view instant prices & details</p>
+            <h3 className="text-base font-bold text-slate-900">Product Barcode</h3>
+            <p className="text-xs text-slate-500">Packaging barcode for SKU</p>
           </div>
           <button
             type="button"
@@ -91,29 +113,25 @@ export const QrCodeModal: React.FC<QrCodeModalProps> = ({ product, onClose }) =>
         <div className="my-6 flex flex-col items-center">
           <div
             ref={printRef}
-            className="flex flex-col items-center rounded-xl border border-dashed border-slate-300 bg-slate-50 p-5 text-center shadow-inner"
+            className="flex items-center justify-center rounded-xl border border-dashed border-slate-300 bg-white p-3 shadow-inner max-w-full overflow-x-auto"
           >
-            <div className="name max-w-[220px] truncate text-sm font-bold text-slate-900">{product.name}</div>
-            <div className="sku text-xs text-slate-500">SKU: {product.sku}</div>
-
-            <div className="my-3 rounded-lg bg-white p-2.5 shadow-sm">
-              <QRCodeSVG
-                value={qrValue}
-                size={160}
-                level="M"
-                includeMargin={false}
-              />
-            </div>
-
-            <div className="scan-hint mt-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-              Scan to view live price
-            </div>
-
-            {product.hsnSac && (
-              <div className="mt-1 text-[10px] text-slate-400">HSN: {product.hsnSac}</div>
-            )}
+            <svg ref={barcodeRef} className="max-w-full" />
           </div>
         </div>
+
+        {onAddToPrintQueue && (
+          <button
+            type="button"
+            className={`w-full mb-3 rounded-xl border py-2 text-xs font-bold transition shadow-sm ${added ? "border-emerald-500 bg-emerald-600 text-white" : "border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100"}`}
+            onClick={() => {
+              onAddToPrintQueue(product);
+              setAdded(true);
+              setTimeout(() => setAdded(false), 2000);
+            }}
+          >
+            {added ? "Added to A4 Print Queue" : "+ Add to A4 Print Queue"}
+          </button>
+        )}
 
         <div className="flex gap-2">
           <button
@@ -121,7 +139,7 @@ export const QrCodeModal: React.FC<QrCodeModalProps> = ({ product, onClose }) =>
             className="flex-1 rounded-xl bg-slate-900 px-4 py-2.5 text-xs font-bold text-white shadow hover:bg-slate-800"
             onClick={handlePrint}
           >
-            Print Sticker
+            Print Barcode
           </button>
           <button
             type="button"

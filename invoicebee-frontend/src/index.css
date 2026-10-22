@@ -8,6 +8,7 @@
   box-sizing: border-box;
 }
 
+html,
 body {
   margin: 0;
   min-width: 320px;
@@ -15,6 +16,7 @@ body {
   background: #f8fafc;
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
 }
 
 button,
@@ -87,6 +89,30 @@ select {
   .auth-box-three,
   .auth-scanner,
   .auth-orbit path {
+    animation: none;
+  }
+}
+
+@keyframes clean-scan {
+  0% {
+    top: 4px;
+    opacity: 0;
+  }
+  20%, 80% {
+    opacity: 1;
+  }
+  100% {
+    top: calc(100% - 6px);
+    opacity: 0;
+  }
+}
+
+.clean-scan-line {
+  animation: clean-scan 2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .clean-scan-line {
     animation: none;
   }
 }

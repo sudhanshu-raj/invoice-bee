@@ -5,39 +5,18 @@ import com.app.invoice_bee.dtos.ProductMatchDto;
 import com.app.invoice_bee.dtos.PurchaseInvoiceDto;
 import com.app.invoice_bee.dtos.SavePurchaseInvoiceItemRequest;
 import com.app.invoice_bee.dtos.SavePurchaseInvoiceRequest;
+import com.app.invoice_bee.entities.*;
 import com.app.invoice_bee.exceptions.DuplicateInvoiceException;
-import com.app.invoice_bee.entities.IdentifierType;
-import com.app.invoice_bee.entities.Inventory;
-import com.app.invoice_bee.entities.InvoiceData;
-import com.app.invoice_bee.entities.InvoiceStatus;
-import com.app.invoice_bee.entities.MovementType;
-import com.app.invoice_bee.entities.PaymentMode;
-import com.app.invoice_bee.entities.Product;
-import com.app.invoice_bee.entities.ProductCostHistory;
-import com.app.invoice_bee.entities.ProductIdentifier;
-import com.app.invoice_bee.entities.ProductPitch;
-import com.app.invoice_bee.entities.ProductPrice;
-import com.app.invoice_bee.entities.ProductPriceHistory;
-import com.app.invoice_bee.entities.PurchaseInvoice;
-import com.app.invoice_bee.entities.PurchaseInvoiceItem;
-import com.app.invoice_bee.entities.Shop;
-import com.app.invoice_bee.entities.StockMovement;
-import com.app.invoice_bee.entities.Supplier;
-import com.app.invoice_bee.entities.User;
-import com.app.invoice_bee.repositories.InventoryRepository;
-import com.app.invoice_bee.repositories.ProductCostHistoryRepository;
-import com.app.invoice_bee.repositories.ProductIdentifierRepository;
-import com.app.invoice_bee.repositories.ProductPitchRepository;
-import com.app.invoice_bee.repositories.ProductPriceHistoryRepository;
-import com.app.invoice_bee.repositories.ProductPriceRepository;
-import com.app.invoice_bee.repositories.ProductRepository;
-import com.app.invoice_bee.repositories.PurchaseInvoiceItemRepository;
-import com.app.invoice_bee.repositories.PurchaseInvoiceRepository;
-import com.app.invoice_bee.repositories.StockMovementRepository;
-import com.app.invoice_bee.repositories.SupplierRepository;
-import com.app.invoice_bee.repositories.UserRepository;
+import com.app.invoice_bee.repositories.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
@@ -48,6 +27,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -57,6 +37,8 @@ import java.util.UUID;
 
 @Service
 public class InvoiceService {
+    
+    private final Logger log = LoggerFactory.getLogger(InvoiceService.class);
 
     private final UserRepository userRepository;
     private final SupplierRepository supplierRepository;
@@ -70,7 +52,9 @@ public class InvoiceService {
     private final ProductCostHistoryRepository productCostHistoryRepository;
     private final ProductIdentifierRepository productIdentifierRepository;
     private final ProductPitchRepository productPitchRepository;
-    private final InvoiceParserService invoiceParserService;
+    private final InvoiceJobRepository invoiceJobRepository;
+    private final InvoiceProcessingPipeline invoiceProcessingPipeline;
+    private final InvoiceJobExecutionService invoiceJobExecutionService;
 
     public InvoiceService(
             UserRepository userRepository,
@@ -85,7 +69,9 @@ public class InvoiceService {
             ProductCostHistoryRepository productCostHistoryRepository,
             ProductIdentifierRepository productIdentifierRepository,
             ProductPitchRepository productPitchRepository,
-            InvoiceParserService invoiceParserService
+            InvoiceJobRepository invoiceJobRepository,
+            InvoiceProcessingPipeline invoiceProcessingPipeline,
+            InvoiceJobExecutionService invoiceJobExecutionService
     ) {
         this.userRepository = userRepository;
         this.supplierRepository = supplierRepository;
@@ -99,11 +85,12 @@ public class InvoiceService {
         this.productCostHistoryRepository = productCostHistoryRepository;
         this.productIdentifierRepository = productIdentifierRepository;
         this.productPitchRepository = productPitchRepository;
-        this.invoiceParserService = invoiceParserService;
+        this.invoiceJobRepository = invoiceJobRepository;
+        this.invoiceProcessingPipeline = invoiceProcessingPipeline;
+        this.invoiceJobExecutionService = invoiceJobExecutionService;
     }
 
-    @Transactional(readOnly = true)
-    public InvoiceScanResponse scanInvoice(MultipartFile file, String userEmail) {
+    public InvoiceJobResponse scanInvoice(MultipartFile file, String userEmail) {
         User user = userRepository.findByEmail(userEmail)
                 .orElseThrow(() -> new IllegalArgumentException("User not found with email: " + userEmail));
 
@@ -112,44 +99,56 @@ public class InvoiceService {
             throw new IllegalStateException("User does not have an active shop. Complete shop setup first.");
         }
 
-        String sourceFileUrl = null;
-        if (file != null && !file.isEmpty()) {
-            try {
-                Path uploadDir = Paths.get("uploads", "invoices");
-                if (!Files.exists(uploadDir)) {
-                    Files.createDirectories(uploadDir);
-                }
-                String originalFilename = file.getOriginalFilename() != null ? file.getOriginalFilename() : "invoice.png";
-                String cleanName = originalFilename.replaceAll("[^a-zA-Z0-9._-]", "_");
-                String storedFilename = UUID.randomUUID() + "_" + cleanName;
-                Path destination = uploadDir.resolve(storedFilename);
-                Files.copy(file.getInputStream(), destination, StandardCopyOption.REPLACE_EXISTING);
-                sourceFileUrl = "/uploads/invoices/" + storedFilename;
-            } catch (IOException ignored) {
+        if (file == null || file.isEmpty()) {
+            InvoiceJob invoiceJob = new InvoiceJob();
+            invoiceJob.setShopId(shop.getId());
+            invoiceJob.setOriginalFileName("Sample Invoice");
+            invoiceJob.setStatus(InvoiceJobStatus.COMPLETED);
+            invoiceJob.setCreatedAt(LocalDateTime.now());
+            invoiceJob.setUpdatedAt(LocalDateTime.now());
+            InvoiceScanResponse sampleResponse = invoiceJobExecutionService.generateSampleScanResponse(shop.getId());
+            invoiceJob.setResult(sampleResponse);
+            InvoiceJob saved = invoiceJobRepository.save(invoiceJob);
+            return new InvoiceJobResponse(saved.getId(), saved.getStatus(), saved.getResult());
+        }
+
+        String fileId = UUID.randomUUID().toString();
+        String originalFilename = file.getOriginalFilename() != null ? file.getOriginalFilename() : "invoice.png";
+        String cleanName = originalFilename.replaceAll("[^a-zA-Z0-9._-]", "_");
+        String storedFilename = fileId + "_" + cleanName;
+
+        try {
+            Path uploadDir = Paths.get("uploads", "invoices");
+            if (!Files.exists(uploadDir)) {
+                Files.createDirectories(uploadDir);
             }
+            Path destination = uploadDir.resolve(storedFilename);
+            Files.copy(file.getInputStream(), destination, StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException e) {
+            log.error("Failed to store uploaded invoice file: {}", e.getMessage(), e);
+            throw new RuntimeException("Failed to store uploaded invoice file: " + e.getMessage(), e);
         }
 
-        InvoiceData invoiceData = invoiceParserService.parseUploadedInvoice(file);
+        InvoiceJob invoiceJob = new InvoiceJob();
+        invoiceJob.setShopId(shop.getId());
+        invoiceJob.setStoredFileName(storedFilename);
+        invoiceJob.setOriginalFileName(originalFilename);
+        invoiceJob.setStatus(InvoiceJobStatus.UPLOADED);
+        invoiceJob.setCreatedAt(LocalDateTime.now());
+        invoiceJob.setUpdatedAt(LocalDateTime.now());
 
-        List<Product> shopProducts = productRepository.findByShopId(shop.getId());
-        List<ProductMatchDto> availableProducts = new ArrayList<>();
-        for (Product p : shopProducts) {
-            BigDecimal stock = inventoryRepository.findByProductId(p.getId())
-                    .map(Inventory::getQuantityOnHand)
-                    .orElse(BigDecimal.ZERO);
-            availableProducts.add(new ProductMatchDto(
-                    p.getId(),
-                    p.getName(),
-                    p.getSku(),
-                    p.getSellingPrice(),
-                    p.getMrp(),
-                    p.getLastPurchaseCost(),
-                    stock,
-                    p.getQrToken()
-            ));
+        InvoiceJob savedEntity = invoiceJobRepository.saveAndFlush(invoiceJob);
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    invoiceProcessingPipeline.submitJob(savedEntity.getId());
+                }
+            });
+        } else {
+            invoiceProcessingPipeline.submitJob(savedEntity.getId());
         }
-
-        return new InvoiceScanResponse(invoiceData, availableProducts, sourceFileUrl);
+        return new InvoiceJobResponse(savedEntity.getId(), savedEntity.getStatus(), null);
     }
 
     @Transactional
@@ -369,7 +368,22 @@ public class InvoiceService {
                 savedInvoice.getSourceFileUrl()
         );
     }
+    
+    @Transactional(readOnly = true)
+    public InvoiceJobResponse getInvoiceJobStatus(UUID id, String userEmail) {
+        User user = userRepository.findByEmail(userEmail)
+                .orElseThrow(() -> new IllegalArgumentException("User not found with email: " + userEmail));
+        Shop shop = user.getShop();
+        if (shop == null) {
+            throw new IllegalStateException("User does not have an active shop configured.");
+        }
 
+        InvoiceJob invoiceJob = invoiceJobRepository.findByIdAndShopId(id, shop.getId())
+                .orElseThrow(() -> new IllegalArgumentException("Invoice job not found with id: " + id));
+
+        return new InvoiceJobResponse(invoiceJob.getId(), invoiceJob.getStatus(), invoiceJob.getResult());
+    }
+    
     private Supplier resolveSupplier(Shop shop, SavePurchaseInvoiceRequest request) {
         if (request.getSupplierGstin() != null && !request.getSupplierGstin().isBlank()) {
             Optional<Supplier> byGstin = supplierRepository.findByShopIdAndGstin(shop.getId(), request.getSupplierGstin().trim());

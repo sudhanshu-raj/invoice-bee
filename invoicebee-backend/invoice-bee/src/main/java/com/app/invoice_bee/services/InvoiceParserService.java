@@ -1,24 +1,23 @@
 package com.app.invoice_bee.services;
 
 import com.app.invoice_bee.entities.InvoiceData;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.content.Media;
-import org.springframework.core.io.ByteArrayResource;
-import org.springframework.core.io.Resource;
-import org.springframework.stereotype.Service;
-import org.springframework.util.MimeType;
-import org.springframework.util.MimeTypeUtils;
-import org.springframework.web.multipart.MultipartFile;
-
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.io.ByteArrayResource;
+import org.springframework.core.io.Resource;
 import org.springframework.http.MediaType;
+import org.springframework.stereotype.Service;
 import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.util.MimeType;
+import org.springframework.util.MimeTypeUtils;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -112,23 +111,24 @@ public class InvoiceParserService {
             List<OcrLine> lines
     ) {}
 
-    public OcrResponse extractOcrResponse(MultipartFile file) {
-        if (file == null || file.isEmpty()) {
-            throw new IllegalArgumentException("Invoice file is empty or null");
-        }
+    public OcrResponse extractOcrResponse(Resource file) {
         try {
+            if (file == null || !file.exists()) {
+                throw new IllegalArgumentException("Invoice file is empty or null");
+            }
+            
             byte[] fileBytes;
             try {
                 fileBytes = imageResizeService.resizeImage(file);
             } catch (Exception resizeEx) {
                 log.warn("Image resizing failed, proceeding with original file bytes: {}", resizeEx.getMessage());
-                fileBytes = file.getBytes();
+                fileBytes = file.getContentAsByteArray();
             }
 
             Resource fileResource = new ByteArrayResource(fileBytes) {
                 @Override
                 public String getFilename() {
-                    return file.getOriginalFilename() != null ? file.getOriginalFilename() : "invoice.png";
+                    return file.getFilename() != null ? file.getFilename() : "invoice.png";
                 }
             };
 
@@ -147,12 +147,13 @@ public class InvoiceParserService {
             }
             return response;
         } catch (Exception ex) {
-            log.error("OCR extraction failed: ", ex);
-            throw new RuntimeException("Failed to extract OCR response: " + ex.getMessage(), ex);
+            String failMsg = "OCR extraction failed: " + ex.getMessage();
+            log.error(failMsg, ex);
+            throw new RuntimeException(failMsg, ex);
         }
     }
 
-    public String extractOcrText(MultipartFile file) {
+    public String extractOcrText(Resource file) {
         OcrResponse response = extractOcrResponse(file);
         if (response.rawText() != null && !response.rawText().isBlank()) {
             return response.toString();
@@ -160,19 +161,15 @@ public class InvoiceParserService {
         throw new IllegalStateException("OCR service response did not contain rawText");
     }
 
-    public InvoiceData parseUploadedInvoiceWithOcrAndGemini(MultipartFile file) {
-        try {
-            if (file != null && !file.isEmpty()) {
-                String ocrRawText = extractOcrText(file);
-                return parseOcrTextToInvoiceWithGemini(ocrRawText);
-            }
-        } catch (Exception ex) {
-            log.warn("OCR and Gemini invoice extraction failed: {}. Falling back to default invoice data.", ex.getMessage(), ex);
+    public InvoiceData parseUploadedInvoiceWithOcrAndGemini(Resource file) {
+        if (file == null || !file.exists()) {
+            throw new IllegalArgumentException("Input file is empty or null");
         }
-        return createFallbackInvoiceData();
+        String ocrRawText = extractOcrText(file);
+        return parseOcrTextToInvoiceWithGemini(ocrRawText);
     }
 
-    public InvoiceData parseUploadedInvoice(MultipartFile file) {
+    public InvoiceData parseUploadedInvoice(Resource file) {
         return parseUploadedInvoiceWithOcrAndGemini(file);
     }
 
@@ -236,7 +233,7 @@ public class InvoiceParserService {
                     .entity(InvoiceData.class);
         } catch (Exception ex) {
             log.error("Gemini OCR text AI extraction failed: ", ex);
-            return createFallbackInvoiceData();
+            throw new RuntimeException("Gemini OCR text AI extraction failed", ex);
         }
     }
 

@@ -1,5 +1,6 @@
 package com.app.invoice_bee.services;
 
+import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -11,7 +12,7 @@ import net.coobird.thumbnailator.Thumbnails;
 @Service
 public class ImageResizeService {
 
-    public byte[] resizeImage(MultipartFile file) throws IOException {
+    public byte[] resizeImage(Resource file) throws IOException {
         try (InputStream inputStream = file.getInputStream();
              ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
 

@@ -1,8 +1,10 @@
 package com.app.invoice_bee.controllers;
 
 import com.app.invoice_bee.dtos.InvoiceScanResponse;
+import com.app.invoice_bee.dtos.PurchaseInvoiceDetailDto;
 import com.app.invoice_bee.dtos.PurchaseInvoiceDto;
 import com.app.invoice_bee.dtos.SavePurchaseInvoiceRequest;
+import com.app.invoice_bee.entities.InvoiceJobResponse;
 import com.app.invoice_bee.entities.PurchaseInvoice;
 import com.app.invoice_bee.entities.Shop;
 import com.app.invoice_bee.entities.User;
@@ -54,11 +56,17 @@ public class InvoiceController {
     }
 
     @PostMapping(value = "/scan", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<InvoiceScanResponse> scanInvoice(
+    public ResponseEntity<InvoiceJobResponse> scanInvoice(
             @RequestParam(value = "file", required = false) MultipartFile file,
             @AuthenticationPrincipal UserDetails userDetails
     ) {
-        InvoiceScanResponse response = invoiceService.scanInvoice(file, userDetails.getUsername());
+        InvoiceJobResponse response = invoiceService.scanInvoice(file, userDetails.getUsername());
+        return ResponseEntity.ok(response);
+    }
+    
+    @GetMapping("/jobs/status/{id}")
+    public ResponseEntity<InvoiceJobResponse> getInvoiceJobStatus(@PathVariable("id") UUID id, @AuthenticationPrincipal UserDetails userDetails) {
+        InvoiceJobResponse response = invoiceService.getInvoiceJobStatus(id, userDetails.getUsername());
         return ResponseEntity.ok(response);
     }
 
@@ -99,8 +107,8 @@ public class InvoiceController {
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<com.app.invoice_bee.dtos.PurchaseInvoiceDetailDto> getInvoiceById(
-            @org.springframework.web.bind.annotation.PathVariable("id") java.util.UUID id,
+    public ResponseEntity<PurchaseInvoiceDetailDto> getInvoiceById(
+            @PathVariable("id") UUID id,
             @AuthenticationPrincipal UserDetails userDetails
     ) {
         User user = userRepository.findByEmail(userDetails.getUsername())

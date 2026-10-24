@@ -47,6 +47,21 @@ export interface InvoiceScanResponse {
   sourceFileUrl?: string;
 }
 
+export type InvoiceJobStatus =
+  | "STARTED"
+  | "UPLOADED"
+  | "PROCESSING"
+  | "EXTRACTED"
+  | "POLISHED"
+  | "COMPLETED"
+  | "FAILED";
+
+export interface InvoiceJobResponse {
+  jobId: string;
+  status: InvoiceJobStatus;
+  result?: InvoiceScanResponse | null;
+}
+
 export interface SavePurchaseInvoiceItemPayload {
   matchedProductId?: string | null;
   name: string;
@@ -130,7 +145,9 @@ async function handleResponse<T>(response: Response): Promise<T> {
   return data as T;
 }
 
-export async function scanInvoiceFile(file?: File | null): Promise<InvoiceScanResponse> {
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+export async function startInvoiceScan(file?: File | null): Promise<InvoiceJobResponse> {
   const token = getToken();
   if (!token) {
     throw new Error("You must be logged in to scan invoices.");
@@ -149,7 +166,59 @@ export async function scanInvoiceFile(file?: File | null): Promise<InvoiceScanRe
     body: formData,
   });
 
-  return handleResponse<InvoiceScanResponse>(response);
+  return handleResponse<InvoiceJobResponse>(response);
+}
+
+export async function getInvoiceJobStatus(jobId: string): Promise<InvoiceJobResponse> {
+  const token = getToken();
+  if (!token) {
+    throw new Error("You must be logged in to check invoice status.");
+  }
+
+  const response = await fetch(`/api/invoices/jobs/status/${jobId}`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  return handleResponse<InvoiceJobResponse>(response);
+}
+
+export async function scanInvoiceFile(
+  file?: File | null,
+  onStatusChange?: (status: InvoiceJobStatus) => void
+): Promise<InvoiceScanResponse> {
+  const initial = await startInvoiceScan(file);
+  onStatusChange?.(initial.status);
+
+  if (initial.status === "COMPLETED" && initial.result) {
+    return initial.result;
+  }
+
+  const jobId = initial.jobId;
+  const pollIntervalMs = 2000;
+  const timeoutMs = 180000;
+  const startTime = Date.now();
+
+  while (Date.now() - startTime < timeoutMs) {
+    await sleep(pollIntervalMs);
+    const job = await getInvoiceJobStatus(jobId);
+    onStatusChange?.(job.status);
+
+    if (job.status === "COMPLETED") {
+      if (job.result) {
+        return job.result;
+      }
+      throw new Error("Invoice scan completed but no result was returned.");
+    }
+
+    if (job.status === "FAILED") {
+      throw new Error("Invoice processing failed. Please check the image and try again.");
+    }
+  }
+
+  throw new Error("Invoice scan timed out. Please try again.");
 }
 
 export async function savePurchaseInvoice(payload: SavePurchaseInvoicePayload): Promise<PurchaseInvoiceDto> {

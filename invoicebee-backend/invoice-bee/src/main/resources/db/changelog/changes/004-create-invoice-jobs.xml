@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="016-create-invoice-jobs" author="invoicebee">
+        <createTable tableName="invoice_job">
+            <column name="id" type="VARCHAR(36)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="shop_id" type="VARCHAR(36)">
+                <constraints nullable="false" foreignKeyName="fk_invoice_job_shop" references="shops(id)"/>
+            </column>
+            <column name="status" type="VARCHAR(30)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="stored_file_name" type="VARCHAR(255)"/>
+            <column name="original_file_name" type="VARCHAR(255)"/>
+            <column name="result" type="JSON"/>
+            <column name="failure_message" type="TEXT"/>
+            <column name="created_at" type="DATETIME(6)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="DATETIME(6)">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <createIndex tableName="invoice_job" indexName="idx_invoice_job_shop_id">
+            <column name="shop_id"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

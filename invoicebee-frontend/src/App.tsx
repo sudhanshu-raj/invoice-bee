@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { User, getToken, getStoredUser, signup, signin, fetchCurrentUser, logout, createShop, updateShop, fetchCurrentShop, createTeamUser, fetchTeamUsers } from "./services/auth";
-import { scanInvoiceFile, savePurchaseInvoice, ProductMatchDto, SavePurchaseInvoicePayload, PurchaseInvoiceDto, fetchPurchaseInvoices, fetchPurchaseInvoiceById, fetchInvoiceFileBlob, PurchaseInvoiceDetailDto, DuplicateInvoiceError, DuplicateInvoiceConflictDetails } from "./services/invoice";
+import { scanInvoiceFile, savePurchaseInvoice, ProductMatchDto, SavePurchaseInvoicePayload, PurchaseInvoiceDto, fetchPurchaseInvoices, fetchPurchaseInvoiceById, fetchInvoiceFileBlob, PurchaseInvoiceDetailDto, DuplicateInvoiceError, DuplicateInvoiceConflictDetails, InvoiceJobStatus } from "./services/invoice";
 import { ProductDetail, fetchShopProducts, createProduct, deleteProduct, deleteProductsBatch } from "./services/product";
 import { SupplierSummary, fetchSuppliers, createSupplier } from "./services/supplier";
 import { enrichProductWeb, ProductWebIntelligence } from "./services/intelligence";
@@ -1412,12 +1412,14 @@ function InvoiceScanner() {
   const [duplicateConflict, setDuplicateConflict] = useState<DuplicateInvoiceConflictDetails | null>(null);
 
   const [items, setItems] = useState<ReviewItem[]>([]);
+  const [scanStatus, setScanStatus] = useState<InvoiceJobStatus | null>(null);
 
   const fileRef = useRef<HTMLInputElement>(null);
 
   const handleFileUpload = async (file?: File | null) => {
     setError("");
     setLoading(true);
+    setScanStatus(null);
 
     if (file) {
       setFileName(file.name);
@@ -1432,7 +1434,7 @@ function InvoiceScanner() {
     }
 
     try {
-      const response = await scanInvoiceFile(file);
+      const response = await scanInvoiceFile(file, (status) => setScanStatus(status));
       const invData = response.invoiceData;
       setAvailableProducts(response.availableProducts || []);
       setSourceFileUrl(response.sourceFileUrl || null);
@@ -1507,6 +1509,7 @@ function InvoiceScanner() {
       }
     } finally {
       setLoading(false);
+      setScanStatus(null);
     }
   };
 
@@ -1682,7 +1685,7 @@ function InvoiceScanner() {
 
       {step === 1 && (
         loading ? (
-          <InvoiceScanningOverlay fileName={fileName} filePreview={filePreview} />
+          <InvoiceScanningOverlay fileName={fileName} filePreview={filePreview} status={scanStatus} />
         ) : (
           <Card className="p-5">
             <div className="grid min-h-[460px] gap-6 lg:grid-cols-2">

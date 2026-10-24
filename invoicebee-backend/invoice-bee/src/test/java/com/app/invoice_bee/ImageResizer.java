@@ -33,7 +33,7 @@ public class ImageResizer {
                     input
             );
             
-            byte[] resizedBytes = imageResizeService.resizeImage(multipartFile);
+            byte[] resizedBytes = imageResizeService.resizeImage(multipartFile.getResource());
             Files.write(Paths.get("test_resized4.jpg"), resizedBytes);
             
         } catch (IOException e) {

@@ -9,12 +9,13 @@ import { QrScannerModal } from "./components/QrScannerModal";
 import { ProductPriceModal } from "./components/ProductPriceModal";
 import { BarcodePrintModal, PrintQueueItem } from "./components/BarcodePrintModal";
 import { InvoiceScanningOverlay } from "./components/InvoiceScanningOverlay";
+import { CustomerEnquiriesScreen } from "./components/CustomerEnquiriesScreen";
 
 type IconName =
   | "grid" | "box" | "tag" | "scan" | "cart" | "sale" | "users" | "spark"
   | "archive" | "refresh" | "chat" | "report" | "settings" | "search"
   | "bell" | "chevron" | "arrow" | "trend" | "warning" | "check" | "plus"
-  | "upload" | "filter" | "more" | "close" | "edit" | "file" | "send" | "menu" | "trash";
+  | "upload" | "filter" | "more" | "close" | "edit" | "file" | "send" | "menu" | "trash" | "phone";
 
 const iconPaths: Record<IconName, string> = {
   grid: "M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z",
@@ -47,6 +48,7 @@ const iconPaths: Record<IconName, string> = {
   send: "m22 2-7 20-4-9-9-4 20-7ZM11 13 22 2",
   menu: "M4 6h16M4 12h16M4 18h16",
   trash: "M3 6h18m-2 0v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6m3 0V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2m-6 5v6m4-6v6",
+  phone: "M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z",
 };
 
 function Icon({ name, size = 18, className = "" }: { name: IconName; size?: number; className?: string }) {
@@ -87,6 +89,7 @@ function PageHeader({ title, description, actions }: { title: string; descriptio
 const nav = [
   ["Overview", "grid"],
   ["Products", "tag"],
+  ["Customer Enquiries", "phone"],
   ["Invoice Scanner", "scan"],
   ["Invoices", "file"],
   ["Suppliers", "users"],
@@ -544,6 +547,10 @@ function Overview({ onNavigate, user, onShopCreated, onShowQr }: { onNavigate: (
             <option value="30">Last 30 days</option>
             <option value="90">Last 90 days</option>
           </Select>
+          <Button variant="secondary" onClick={() => onNavigate("Customer Enquiries")}>
+            <Icon name="phone" size={16} />
+            <span>Enquiries</span>
+          </Button>
           <Button onClick={() => onNavigate("Products")}>
             <Icon name="plus" size={16} />
             <span>Add product</span>
@@ -1413,6 +1420,11 @@ function InvoiceScanner() {
 
   const [items, setItems] = useState<ReviewItem[]>([]);
   const [scanStatus, setScanStatus] = useState<InvoiceJobStatus | null>(null);
+  const [spCalcMode, setSpCalcMode] = useState<"percentage" | "fixed_markup" | "fixed_price">("percentage");
+  const [spCalcValue, setSpCalcValue] = useState<number>(20);
+  const [spRoundToRupee, setSpRoundToRupee] = useState<boolean>(true);
+  const [spAutoUpdateMrp, setSpAutoUpdateMrp] = useState<boolean>(true);
+  const [spAppliedMessage, setSpAppliedMessage] = useState<string>("");
 
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -1465,8 +1477,14 @@ function InvoiceScanner() {
         );
 
         const cost = Number(item.pricePerUnit) || 0;
-        const defaultSelling = matched ? matched.sellingPrice : Math.round(cost * 1.25);
-        const defaultMrp = matched && matched.mrp ? matched.mrp : Math.round(cost * 1.35);
+        const computedAutoSp = spCalcMode === "percentage"
+          ? (cost + (cost * spCalcValue) / 100)
+          : spCalcMode === "fixed_markup"
+          ? (cost + spCalcValue)
+          : spCalcValue;
+        const roundedAutoSp = spRoundToRupee ? Math.max(0, Math.round(computedAutoSp)) : Math.max(0, Math.round(computedAutoSp * 100) / 100);
+        const defaultSelling = matched ? matched.sellingPrice : roundedAutoSp;
+        const defaultMrp = matched && matched.mrp ? matched.mrp : (spRoundToRupee ? Math.round(defaultSelling * 1.15) : Math.round(defaultSelling * 1.15 * 100) / 100);
 
         const invDiscPct = item.discountPercentage !== undefined && item.discountPercentage !== null ? Number(item.discountPercentage) : 0;
         const invDiscAmt = item.discountAmount !== undefined && item.discountAmount !== null ? Number(item.discountAmount) : 0;
@@ -1525,6 +1543,80 @@ function InvoiceScanner() {
     setSubtotal(Math.round(sub * 100) / 100);
     setTaxAmount(Math.round(tax * 100) / 100);
     setGrandTotal(Math.round(grand * 100) / 100);
+  };
+
+  const computeSp = (cost: number, mode: "percentage" | "fixed_markup" | "fixed_price", value: number, round: boolean): number => {
+    let result = cost;
+    if (mode === "percentage") {
+      result = cost + (cost * value) / 100;
+    } else if (mode === "fixed_markup") {
+      result = cost + value;
+    } else if (mode === "fixed_price") {
+      result = value;
+    }
+    if (round) {
+      return Math.max(0, Math.round(result));
+    }
+    return Math.max(0, Math.round(result * 100) / 100);
+  };
+
+  const applySpToItems = (targetScope: "all" | "selected") => {
+    const val = Number(spCalcValue);
+    if (isNaN(val) || val < 0) return;
+
+    let updatedCount = 0;
+    setItems((prev) =>
+      prev.map((item) => {
+        if (targetScope === "selected" && !item.included) return item;
+        const newSp = computeSp(item.unitCost, spCalcMode, val, spRoundToRupee);
+        let newMrp = item.mrp;
+        if (spAutoUpdateMrp) {
+          const mrpVal = newSp * 1.15;
+          newMrp = spRoundToRupee ? Math.round(mrpVal) : Math.round(mrpVal * 100) / 100;
+        } else if (newMrp !== null && newMrp < newSp) {
+          newMrp = newSp;
+        }
+        updatedCount++;
+        return {
+          ...item,
+          sellingPrice: newSp,
+          mrp: newMrp,
+        };
+      })
+    );
+
+    const modeText = spCalcMode === "percentage" ? `+${val}% margin` : spCalcMode === "fixed_markup" ? `+${currency(val)} markup` : `flat ${currency(val)}`;
+    setSpAppliedMessage(`Applied ${modeText} to ${updatedCount} item${updatedCount === 1 ? "" : "s"}`);
+    setTimeout(() => {
+      setSpAppliedMessage("");
+    }, 4000);
+  };
+
+  const applySpToSingleItem = (index: number) => {
+    const val = Number(spCalcValue);
+    if (isNaN(val) || val < 0) return;
+    setItems((prev) =>
+      prev.map((item, i) => {
+        if (i !== index) return item;
+        const newSp = computeSp(item.unitCost, spCalcMode, val, spRoundToRupee);
+        let newMrp = item.mrp;
+        if (spAutoUpdateMrp) {
+          const mrpVal = newSp * 1.15;
+          newMrp = spRoundToRupee ? Math.round(mrpVal) : Math.round(mrpVal * 100) / 100;
+        } else if (newMrp !== null && newMrp < newSp) {
+          newMrp = newSp;
+        }
+        return {
+          ...item,
+          sellingPrice: newSp,
+          mrp: newMrp,
+        };
+      })
+    );
+  };
+
+  const toggleSelectAll = (select: boolean) => {
+    setItems((prev) => prev.map((item) => ({ ...item, included: select })));
   };
 
   const updateItem = (index: number, key: keyof ReviewItem, val: any) => {
@@ -1882,6 +1974,209 @@ function InvoiceScanner() {
               </div>
             </div>
 
+            <div className="border-b border-emerald-100 bg-emerald-50/30 p-4 sm:p-5">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="grid size-7 place-items-center rounded-lg bg-emerald-600 text-white">
+                      <Icon name="tag" size={14} />
+                    </span>
+                    <h3 className="text-sm font-bold text-slate-900">Auto Calculate Selling Price (SP)</h3>
+                    {spAppliedMessage && (
+                      <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-semibold text-emerald-800">
+                        {spAppliedMessage}
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Quickly compute and batch apply selling prices across extracted invoice products.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-slate-200 bg-white p-1">
+                  <button
+                    type="button"
+                    className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+                      spCalcMode === "percentage"
+                        ? "bg-emerald-600 text-white shadow-xs"
+                        : "text-slate-600 hover:bg-slate-100"
+                    }`}
+                    onClick={() => {
+                      setSpCalcMode("percentage");
+                      if (spCalcValue === 50 || spCalcValue === 199) setSpCalcValue(20);
+                    }}
+                  >
+                    Percentage (% on Cost)
+                  </button>
+                  <button
+                    type="button"
+                    className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+                      spCalcMode === "fixed_markup"
+                        ? "bg-emerald-600 text-white shadow-xs"
+                        : "text-slate-600 hover:bg-slate-100"
+                    }`}
+                    onClick={() => {
+                      setSpCalcMode("fixed_markup");
+                      if (spCalcValue === 20 || spCalcValue === 199) setSpCalcValue(50);
+                    }}
+                  >
+                    Fixed Markup (+₹ on Cost)
+                  </button>
+                  <button
+                    type="button"
+                    className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+                      spCalcMode === "fixed_price"
+                        ? "bg-emerald-600 text-white shadow-xs"
+                        : "text-slate-600 hover:bg-slate-100"
+                    }`}
+                    onClick={() => {
+                      setSpCalcMode("fixed_price");
+                      if (spCalcValue === 20 || spCalcValue === 50) setSpCalcValue(199);
+                    }}
+                  >
+                    Flat Price (Fixed ₹)
+                  </button>
+                </div>
+              </div>
+
+              <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-12 lg:items-end">
+                <div className="sm:col-span-1 lg:col-span-3">
+                  <label className="block text-xs font-semibold text-slate-700">
+                    {spCalcMode === "percentage" ? "Margin / Markup Percentage" : spCalcMode === "fixed_markup" ? "Fixed Markup Amount (₹)" : "Fixed Selling Price (₹)"}
+                  </label>
+                  <div className="mt-1 flex items-center">
+                    <span className="inline-flex h-9 items-center rounded-l-lg border border-r-0 border-slate-200 bg-slate-100 px-3 text-xs font-bold text-slate-600">
+                      {spCalcMode === "percentage" ? "%" : "₹"}
+                    </span>
+                    <Input
+                      type="number"
+                      step={spCalcMode === "percentage" ? "0.5" : "1"}
+                      min="0"
+                      className="rounded-l-none font-bold text-slate-900"
+                      value={spCalcValue}
+                      onChange={(e) => setSpCalcValue(Number(e.target.value))}
+                    />
+                  </div>
+                </div>
+
+                <div className="sm:col-span-1 lg:col-span-4">
+                  <span className="block text-xs font-semibold text-slate-700">Quick Presets</span>
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {(spCalcMode === "percentage" ? [10, 15, 20, 25, 30, 40, 50] : spCalcMode === "fixed_markup" ? [10, 25, 50, 100, 200] : [49, 99, 149, 199, 299, 499]).map((val) => (
+                      <button
+                        key={val}
+                        type="button"
+                        className={`rounded-md border px-2 py-1 text-xs font-semibold transition ${
+                          spCalcValue === val
+                            ? "border-emerald-600 bg-emerald-600 text-white"
+                            : "border-slate-200 bg-white text-slate-700 hover:border-emerald-300 hover:bg-emerald-50/50"
+                        }`}
+                        onClick={() => setSpCalcValue(val)}
+                      >
+                        {spCalcMode === "percentage" ? `+${val}%` : spCalcMode === "fixed_markup" ? `+₹${val}` : `₹${val}`}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="sm:col-span-2 lg:col-span-5 flex flex-wrap items-center justify-between gap-3 lg:justify-end">
+                  <div className="space-y-1">
+                    <label className="flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        className="size-3.5 accent-emerald-600 rounded"
+                        checked={spRoundToRupee}
+                        onChange={(e) => setSpRoundToRupee(e.target.checked)}
+                      />
+                      Round SP to nearest ₹1
+                    </label>
+                    <label className="flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        className="size-3.5 accent-emerald-600 rounded"
+                        checked={spAutoUpdateMrp}
+                        onChange={(e) => setSpAutoUpdateMrp(e.target.checked)}
+                      />
+                      Auto-set MRP (+15% above SP)
+                    </label>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      onClick={() => applySpToItems("all")}
+                      className="text-xs sm:text-sm whitespace-nowrap"
+                    >
+                      <Icon name="tag" size={15} />
+                      Apply to All ({items.length})
+                    </Button>
+                    {activeItems.length !== items.length && activeItems.length > 0 && (
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={() => applySpToItems("selected")}
+                        className="text-xs sm:text-sm whitespace-nowrap"
+                      >
+                        Apply to Selected ({activeItems.length})
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-emerald-100/60 pt-3 text-[11px] text-slate-600">
+                <div className="flex items-center gap-1.5">
+                  <span className="font-semibold text-slate-700">Formula Rule:</span>
+                  <span className="rounded bg-white px-2 py-0.5 font-medium border border-slate-200">
+                    {spCalcMode === "percentage"
+                      ? `SP = Buying Cost + ${spCalcValue}%`
+                      : spCalcMode === "fixed_markup"
+                      ? `SP = Buying Cost + ₹${spCalcValue}`
+                      : `SP = Flat ₹${spCalcValue}`}
+                  </span>
+                  <span>
+                    (e.g., Cost ₹100.00 will become SP {currency(computeSp(100, spCalcMode, Number(spCalcValue) || 0, spRoundToRupee))})
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 bg-slate-50/50 px-4 py-2.5 text-xs">
+              <div className="flex items-center gap-3">
+                <label className="flex items-center gap-2 font-semibold text-slate-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="size-4 accent-emerald-600 rounded"
+                    checked={items.length > 0 && items.every((x) => x.included)}
+                    onChange={(e) => toggleSelectAll(e.target.checked)}
+                  />
+                  Select All Products
+                </label>
+                <span className="text-slate-400">|</span>
+                <span className="text-slate-500">
+                  <strong className="text-slate-900">{activeItems.length}</strong> of {items.length} items selected for import
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="text-xs font-semibold text-emerald-700 hover:text-emerald-800"
+                  onClick={() => toggleSelectAll(true)}
+                >
+                  Check All
+                </button>
+                <span className="text-slate-300">·</span>
+                <button
+                  type="button"
+                  className="text-xs font-semibold text-slate-500 hover:text-slate-700"
+                  onClick={() => toggleSelectAll(false)}
+                >
+                  Uncheck All
+                </button>
+              </div>
+            </div>
+
             <div className="divide-y divide-slate-100">
               {items.map((item, index) => (
                 <div key={item.id} className={`p-4 transition ${!item.included ? "bg-slate-50/60 opacity-60" : "hover:bg-slate-50/30"}`}>
@@ -2030,15 +2325,36 @@ function InvoiceScanner() {
 
                       <div className="grid gap-3 rounded-lg border border-slate-200/80 bg-slate-50/50 p-3 sm:grid-cols-2 lg:grid-cols-4">
                         <label className="text-[11px] font-bold text-emerald-700">
-                          Selling Price (₹) <span className="text-rose-500">*</span>
-                          <Input
-                            className="mt-1 border-emerald-300 bg-white text-xs font-bold text-emerald-800 focus:border-emerald-600"
-                            type="number"
-                            step="0.01"
-                            value={item.sellingPrice}
-                            onChange={(e) => updateItem(index, "sellingPrice", Number(e.target.value))}
-                            required
-                          />
+                          <div className="flex items-center justify-between">
+                            <span>Selling Price (₹) <span className="text-rose-500">*</span></span>
+                            {(() => {
+                              const profit = (item.sellingPrice || 0) - (item.unitCost || 0);
+                              const pct = item.unitCost > 0 ? Math.round((profit / item.unitCost) * 100 * 10) / 10 : 0;
+                              return (
+                                <span className={`rounded px-1.5 py-0.2 text-[10px] font-bold ${profit > 0 ? "bg-emerald-100 text-emerald-800" : profit === 0 ? "bg-slate-200 text-slate-700" : "bg-rose-100 text-rose-800"}`}>
+                                  {profit > 0 ? `+${pct}% (+₹${profit})` : profit === 0 ? "0% (Cost)" : `${pct}% (Loss)`}
+                                </span>
+                              );
+                            })()}
+                          </div>
+                          <div className="mt-1 flex items-center gap-1">
+                            <Input
+                              className="border-emerald-300 bg-white text-xs font-bold text-emerald-800 focus:border-emerald-600"
+                              type="number"
+                              step="0.01"
+                              value={item.sellingPrice}
+                              onChange={(e) => updateItem(index, "sellingPrice", Number(e.target.value))}
+                              required
+                            />
+                            <button
+                              type="button"
+                              className="shrink-0 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[11px] font-semibold text-slate-600 hover:border-emerald-500 hover:text-emerald-700 shadow-2xs"
+                              title="Calculate SP for this item using current rule"
+                              onClick={() => applySpToSingleItem(index)}
+                            >
+                              Auto SP
+                            </button>
+                          </div>
                         </label>
 
                         <label className="text-[11px] font-semibold text-slate-600">
@@ -3731,6 +4047,7 @@ export default function App() {
   const render = () => {
     if (active === "Overview") return <Overview onNavigate={setActive} user={currentUser} onShopCreated={(u) => setCurrentUser(u)} onShowQr={openQrModal} />;
     if (active === "Products" || active === "Inventory") return <ProductsScreen onShowQr={openQrModal} onScanQr={() => setShowScanner(true)} printQueueCount={totalPrintQueueCount} onOpenPrintModal={() => setShowPrintModal(true)} onAddToPrintQueue={addToPrintQueue} />;
+    if (active === "Customer Enquiries" || active === "Enquiries") return <CustomerEnquiriesScreen onNavigate={setActive} />;
     if (active === "Invoice Scanner") return <InvoiceScanner />;
     if (active === "Invoices" || active === "Purchases") return <InvoicesScreen onNavigate={setActive} />;
     if (active === "Suppliers") return <SuppliersScreen />;

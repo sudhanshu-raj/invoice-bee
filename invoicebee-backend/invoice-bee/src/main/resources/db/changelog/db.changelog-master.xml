@@ -9,5 +9,7 @@
     <include file="db/changelog/changes/002-create-users.xml"/>
     <include file="db/changelog/changes/003-create-product-prices.xml"/>
     <include file="db/changelog/changes/004-create-invoice-jobs.xml"/>
+    <include file="db/changelog/changes/005-create-customer-enquiries.xml"/>
+    <include file="db/changelog/changes/006-add-customer-enquiry-followups.xml"/>
 
 </databaseChangeLog>

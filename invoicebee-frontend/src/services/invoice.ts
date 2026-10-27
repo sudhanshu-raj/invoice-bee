@@ -198,7 +198,7 @@ export async function scanInvoiceFile(
 
   const jobId = initial.jobId;
   const pollIntervalMs = 2000;
-  const timeoutMs = 180000;
+  const timeoutMs = 1200000;
   const startTime = Date.now();
 
   while (Date.now() - startTime < timeoutMs) {

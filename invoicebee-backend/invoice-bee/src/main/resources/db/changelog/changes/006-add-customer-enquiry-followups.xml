@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="018-add-customer-enquiry-followups" author="invoicebee">
+        <addColumn tableName="customer_enquiries">
+            <column name="follow_up_count" type="INT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="next_follow_up_date" type="DATE"/>
+            <column name="last_followed_up_at" type="DATETIME(6)"/>
+            <column name="follow_up_notes" type="TEXT"/>
+        </addColumn>
+        <createIndex tableName="customer_enquiries" indexName="idx_customer_enquiries_next_follow_up_date">
+            <column name="next_follow_up_date"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

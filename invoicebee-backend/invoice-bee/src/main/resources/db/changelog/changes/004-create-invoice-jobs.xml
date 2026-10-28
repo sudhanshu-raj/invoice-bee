@@ -18,7 +18,7 @@
             </column>
             <column name="stored_file_name" type="VARCHAR(255)"/>
             <column name="original_file_name" type="VARCHAR(255)"/>
-            <column name="result" type="JSON"/>
+            <column name="result" type="JSONB"/>
             <column name="failure_message" type="TEXT"/>
             <column name="created_at" type="DATETIME(6)">
                 <constraints nullable="false"/>

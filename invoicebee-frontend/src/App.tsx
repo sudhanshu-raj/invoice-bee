@@ -1,15 +1,36 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { User, getToken, getStoredUser, signup, signin, fetchCurrentUser, logout, createShop, updateShop, fetchCurrentShop, createTeamUser, fetchTeamUsers } from "./services/auth";
-import { scanInvoiceFile, savePurchaseInvoice, ProductMatchDto, SavePurchaseInvoicePayload, PurchaseInvoiceDto, fetchPurchaseInvoices, fetchPurchaseInvoiceById, fetchInvoiceFileBlob, PurchaseInvoiceDetailDto, DuplicateInvoiceError, DuplicateInvoiceConflictDetails, InvoiceJobStatus } from "./services/invoice";
+import {
+  scanInvoiceFile,
+  savePurchaseInvoice,
+  ProductMatchDto,
+  SavePurchaseInvoicePayload,
+  PurchaseInvoiceDto,
+  fetchPurchaseInvoices,
+  fetchPurchaseInvoiceById,
+  fetchInvoiceFileBlob,
+  PurchaseInvoiceDetailDto,
+  DuplicateInvoiceError,
+  DuplicateInvoiceConflictDetails,
+  InvoiceJobStatus,
+  InvoiceJobResponse,
+  InvoiceScanResponse,
+  getActiveInvoiceJobs,
+  cancelInvoiceJob,
+  cancelAllActiveInvoiceJobs,
+  pollInvoiceJobUntilComplete,
+} from "./services/invoice";
 import { ProductDetail, fetchShopProducts, createProduct, deleteProduct, deleteProductsBatch } from "./services/product";
 import { SupplierSummary, fetchSuppliers, createSupplier } from "./services/supplier";
-import { enrichProductWeb, ProductWebIntelligence } from "./services/intelligence";
+import { enrichProductWeb, ProductWebIntelligence, chatWithInventory, InventoryChatResponse, MatchedProductContext } from "./services/intelligence";
 import { QrCodeModal } from "./components/QrCodeModal";
 import { QrScannerModal } from "./components/QrScannerModal";
 import { ProductPriceModal } from "./components/ProductPriceModal";
 import { BarcodePrintModal, PrintQueueItem } from "./components/BarcodePrintModal";
 import { InvoiceScanningOverlay } from "./components/InvoiceScanningOverlay";
 import { CustomerEnquiriesScreen } from "./components/CustomerEnquiriesScreen";
+import { ProductDetailsView } from "./components/ProductDetailsView";
+import MarkdownRenderer from "./components/MarkdownRenderer";
 
 type IconName =
   | "grid" | "box" | "tag" | "scan" | "cart" | "sale" | "users" | "spark"
@@ -772,25 +793,50 @@ function ProductTable({
                     className="mt-0.5 size-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer shrink-0"
                     checked={isSelected}
                     onChange={() => onToggleSelect && onToggleSelect(p.id)}
-                    onClick={e => e.stopPropagation()}
+                    onClick={(e) => e.stopPropagation()}
                   />
                 )}
                 <div className="min-w-0 flex-1">
-                  <div className="font-semibold text-slate-800 text-sm truncate">{p.name}</div>
-                  <div className="text-xs text-slate-400 mt-0.5">{p.sku} {p.category ? `· ${p.category}` : ""}</div>
+                  <div className="font-semibold text-slate-800 text-sm truncate flex items-center gap-1.5">
+                    <span className="truncate">{p.name}</span>
+                    {p.intelligenceStatus === "IN_PROGRESS" && (
+                      <span
+                        className="relative flex size-2 shrink-0"
+                        title="Job is going on for product data extraction"
+                      >
+                        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-400 opacity-75"></span>
+                        <span className="relative inline-flex size-2 rounded-full bg-rose-500"></span>
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs text-slate-400 mt-0.5">
+                    {p.sku} {p.category ? `· ${p.category}` : ""}
+                  </div>
                 </div>
                 <div className="flex flex-col items-end gap-1 shrink-0">
-                  <Badge tone={status === "In stock" ? "success" : status === "Low stock" ? "warning" : "danger"}>
+                  <Badge
+                    tone={
+                      status === "In stock"
+                        ? "success"
+                        : status === "Low stock"
+                          ? "warning"
+                          : "danger"
+                    }
+                  >
                     {status}
                   </Badge>
-                  <span className="text-[11px] font-semibold text-slate-500">{stock} {p.unit || ""}</span>
+                  <span className="text-[11px] font-semibold text-slate-500">
+                    {stock} {p.unit || ""}
+                  </span>
                 </div>
               </div>
               <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 text-xs">
                 <div className="flex items-center gap-2.5 text-[11px]">
                   <div>
                     <span className="text-slate-400">Price: </span>
-                    <span className="font-bold text-emerald-800">{currency(price)}</span>
+                    <span className="font-bold text-emerald-800">
+                      {currency(price)}
+                    </span>
                   </div>
                   <div>
                     <span className="text-slate-400">Cost: </span>
@@ -798,7 +844,9 @@ function ProductTable({
                   </div>
                   <div>
                     <span className="text-slate-400">Margin: </span>
-                    <span className="font-semibold text-emerald-700">{margin}%</span>
+                    <span className="font-semibold text-emerald-700">
+                      {margin}%
+                    </span>
                   </div>
                 </div>
                 <div className="flex items-center gap-1.5 ml-auto shrink-0">
@@ -879,9 +927,16 @@ function ProductTable({
               const status = stock === 0 ? "Out of stock" : stock < 10 ? "Low stock" : "In stock";
               const isSelected = selectedIds?.has(p.id) || false;
               return (
-                <tr className={`cursor-pointer text-sm transition ${isSelected ? "bg-emerald-50/50" : "hover:bg-slate-50"}`} key={p.id || p.sku} onClick={() => onProduct(p)}>
+                <tr
+                  className={`cursor-pointer text-sm transition ${isSelected ? "bg-emerald-50/50" : "hover:bg-slate-50"}`}
+                  key={p.id || p.sku}
+                  onClick={() => onProduct(p)}
+                >
                   {!compact && (
-                    <td className="w-10 px-4 py-3" onClick={e => e.stopPropagation()}>
+                    <td
+                      className="w-10 px-4 py-3"
+                      onClick={(e) => e.stopPropagation()}
+                    >
                       <input
                         type="checkbox"
                         className="size-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
@@ -891,30 +946,85 @@ function ProductTable({
                     </td>
                   )}
                   <td className="px-5 py-3">
-                    <div className="font-semibold text-slate-800">{p.name}</div>
-                    <div className="text-xs text-slate-400">{p.sku} {p.category ? `· ${p.category}` : ""}</div>
+                    <div className="font-semibold text-slate-800 flex items-center gap-1.5">
+                      <span>{p.name}</span>
+                      {p.intelligenceStatus === "IN_PROGRESS" && (
+                        <span
+                          className="relative flex size-2 shrink-0"
+                          title="Job is going on for product data extraction"
+                        >
+                          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-400 opacity-75"></span>
+                          <span className="relative inline-flex size-2 rounded-full bg-rose-500"></span>
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-xs text-slate-400">
+                      {p.sku} {p.category ? `· ${p.category}` : ""}
+                    </div>
                   </td>
-                  <td className="px-4 py-3 font-medium">{stock} {p.unit || ""}</td>
+                  <td className="px-4 py-3 font-medium">
+                    {stock} {p.unit || ""}
+                  </td>
                   <td className="px-4 py-3">{currency(cost)}</td>
-                  <td className="px-4 py-3 font-semibold text-emerald-800">{currency(price)}</td>
-                  <td className="px-4 py-3 font-medium text-emerald-700">{margin}%</td>
-                  <td className="px-4 py-3">
-                    <Badge tone={status === "In stock" ? "success" : status === "Low stock" ? "warning" : "danger"}>{status}</Badge>
+                  <td className="px-4 py-3 font-semibold text-emerald-800">
+                    {currency(price)}
                   </td>
-                  <td className="px-4 py-3 text-center" onClick={e => e.stopPropagation()}>
+                  <td className="px-4 py-3 font-medium text-emerald-700">
+                    {margin}%
+                  </td>
+                  <td className="px-4 py-3">
+                    <Badge
+                      tone={
+                        status === "In stock"
+                          ? "success"
+                          : status === "Low stock"
+                            ? "warning"
+                            : "danger"
+                      }
+                    >
+                      {status}
+                    </Badge>
+                  </td>
+                  <td
+                    className="px-4 py-3 text-center"
+                    onClick={(e) => e.stopPropagation()}
+                  >
                     <div className="inline-flex items-center gap-1.5 justify-center">
-                      <button type="button" className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm" onClick={() => onShowQr && onShowQr(p)}>
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm"
+                        onClick={() => onProduct && onProduct(p)}
+                        title="View full product page"
+                      >
+                        <Icon name="search" size={13} />
+                        <span>Details</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm"
+                        onClick={() => onShowQr && onShowQr(p)}
+                      >
                         <Icon name="scan" size={13} />
                         <span>Barcode</span>
                       </button>
                       {onAddToPrintQueue && (
-                        <button type="button" className="inline-flex items-center gap-1 rounded-lg border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-800 hover:bg-emerald-100 shadow-sm" onClick={() => onAddToPrintQueue(p)} title="Add to A4 print queue">
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1 rounded-lg border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-800 hover:bg-emerald-100 shadow-sm"
+                          onClick={() => onAddToPrintQueue(p)}
+                          title="Add to A4 print queue"
+                        >
                           <Icon name="plus" size={12} />
                           <span>Print</span>
                         </button>
                       )}
                       {!compact && onDeleteSingle && (
-                        <button type="button" className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-100 shadow-sm" onClick={() => onDeleteSingle(p)} title="Remove product from inventory">
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-100 shadow-sm"
+                          onClick={() => onDeleteSingle(p)}
+                          title="Remove product from inventory"
+                        >
                           <Icon name="trash" size={13} />
                         </button>
                       )}
@@ -1012,73 +1122,310 @@ function ProductDialog({ product, isNew = false, onClose, onShowQr, onSaved }: {
     }
   };
 
-  return <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-950/40 p-0 sm:p-4 backdrop-blur-sm" onMouseDown={onClose}><Card className="w-full max-w-2xl rounded-t-2xl sm:rounded-xl max-h-[92vh] sm:max-h-[85vh] flex flex-col shadow-2xl overflow-hidden"><div className="flex flex-col h-full min-h-0" onMouseDown={e => e.stopPropagation()}><div className="flex items-start justify-between border-b border-slate-100 p-4 sm:p-5"><div><h2 className="text-lg sm:text-xl font-bold text-slate-900">{isNew ? "Add New Product" : form.name}</h2><p className="text-xs sm:text-sm text-slate-500">{form.sku ? `SKU: ${form.sku}` : "Provide details or fetch live intelligence from the web"}</p></div><Button variant="ghost" onClick={onClose}><Icon name="close" /></Button></div>
-    {err && <div className="m-4 rounded-lg bg-rose-50 p-3 text-sm text-rose-700">{err}</div>}
-    
-    <div className="flex-1 overflow-y-auto p-4 sm:p-5">
-      <div className="mb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-emerald-100 bg-emerald-50/60 p-3">
-        <div className="flex items-center gap-2.5">
-          <span className="grid size-8 place-items-center rounded-lg bg-emerald-600 text-white shrink-0"><Icon name="spark" size={16} /></span>
-          <div>
-            <div className="text-xs font-bold text-emerald-950">SearXNG Product Intelligence</div>
-            <div className="text-[11px] text-emerald-700">Search the web for MRP, HSN, brand, and counter sales hooks</div>
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-950/40 p-0 sm:p-4 backdrop-blur-sm"
+      onMouseDown={onClose}
+    >
+      <Card className="w-full max-w-2xl rounded-t-2xl sm:rounded-xl max-h-[92vh] sm:max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+        <div
+          className="flex flex-col h-full min-h-0"
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-start justify-between border-b border-slate-100 p-4 sm:p-5">
+            <div>
+              <h2 className="text-lg sm:text-xl font-bold text-slate-900">
+                {isNew ? "Add New Product" : form.name}
+              </h2>
+              <p className="text-xs sm:text-sm text-slate-500">
+                {form.sku
+                  ? `SKU: ${form.sku}`
+                  : "Provide details or fetch live intelligence from the web"}
+              </p>
+            </div>
+            <Button variant="ghost" onClick={onClose}>
+              <Icon name="close" />
+            </Button>
+          </div>
+          {err && (
+            <div className="m-4 rounded-lg bg-rose-50 p-3 text-sm text-rose-700">
+              {err}
+            </div>
+          )}
+
+          <div className="flex-1 overflow-y-auto p-4 sm:p-5">
+            {product.intelligenceStatus === "IN_PROGRESS" && (
+              <div className="mb-4 flex items-center gap-2.5 rounded-xl border border-rose-200 bg-rose-50/70 p-3 text-xs text-rose-900">
+                <span className="relative flex size-2.5 shrink-0">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-400 opacity-75"></span>
+                  <span className="relative inline-flex size-2.5 rounded-full bg-rose-500"></span>
+                </span>
+                <div>
+                  <span className="font-bold">
+                    Intelligence Extraction in Progress
+                  </span>
+                  <p className="text-[11px] text-rose-700 mt-0.5">
+                    Scraping official product data and specs
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {product.intelligencePitch && (
+              <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50/50 p-3.5">
+                <div className="text-[11px] font-bold uppercase tracking-wider text-emerald-900">
+                  Extracted Marketing Pitch
+                </div>
+                <p className="mt-1 text-xs text-emerald-950 leading-relaxed font-medium">
+                  {product.intelligencePitch}
+                </p>
+              </div>
+            )}
+
+            {product.intelligenceDescription && (
+              <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50/70 p-3.5">
+                <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                  Extracted Full Description
+                </div>
+                <p className="mt-1 text-xs text-slate-800 leading-relaxed whitespace-pre-line">
+                  {product.intelligenceDescription}
+                </p>
+              </div>
+            )}
+
+            <div className="mb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-emerald-100 bg-emerald-50/60 p-3">
+              <div className="flex items-center gap-2.5">
+                <span className="grid size-8 place-items-center rounded-lg bg-emerald-600 text-white shrink-0">
+                  <Icon name="spark" size={16} />
+                </span>
+                <div>
+                  <div className="text-xs font-bold text-emerald-950">
+                    SearXNG Product Intelligence
+                  </div>
+                  <div className="text-[11px] text-emerald-700">
+                    Search the web for MRP, HSN, brand, and counter sales hooks
+                  </div>
+                </div>
+              </div>
+              <Button
+                disabled={enriching || !form.name.trim()}
+                onClick={handleEnrich}
+                type="button"
+                variant="secondary"
+                className="w-full sm:w-auto border-emerald-300 text-emerald-800 hover:bg-emerald-100 shrink-0"
+              >
+                <Icon name="search" size={14} />
+                {enriching ? "Searching..." : "Auto-fill from Web"}
+              </Button>
+            </div>
+
+            {webIntelligence && webIntelligence.sources.length > 0 && (
+              <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                  Web Sources Found
+                </div>
+                <div className="space-y-1">
+                  {webIntelligence.sources.slice(0, 3).map((s, idx) => (
+                    <a
+                      className="block truncate text-xs text-blue-600 hover:underline"
+                      href={s.url}
+                      key={idx}
+                      rel="noopener noreferrer"
+                      target="_blank"
+                    >
+                      • {s.title || s.url}
+                    </a>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="grid gap-3 sm:gap-4 sm:grid-cols-2">
+              <label className="text-xs font-semibold text-slate-600 sm:col-span-2">
+                Product name *
+                <Input
+                  className="mt-1.5"
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  placeholder="e.g. Fortune Sunflower Oil 1L"
+                />
+              </label>
+              <label className="text-xs font-semibold text-slate-600">
+                SKU / Code
+                <Input
+                  className="mt-1.5"
+                  value={form.sku}
+                  onChange={(e) => setForm({ ...form, sku: e.target.value })}
+                  placeholder="Leave blank to auto-generate"
+                />
+              </label>
+              <label className="text-xs font-semibold text-slate-600">
+                Category
+                <Select
+                  className="mt-1.5 w-full"
+                  value={form.category}
+                  onChange={(e) =>
+                    setForm({ ...form, category: e.target.value })
+                  }
+                >
+                  <option>Grocery</option>
+                  <option>Home care</option>
+                  <option>Personal care</option>
+                  <option>Snacks</option>
+                  <option>Beverages</option>
+                  <option>General</option>
+                </Select>
+              </label>
+              <label className="text-xs font-semibold text-slate-600">
+                Brand
+                <Input
+                  className="mt-1.5"
+                  value={form.brand}
+                  onChange={(e) => setForm({ ...form, brand: e.target.value })}
+                  placeholder="e.g. Fortune"
+                />
+              </label>
+              <label className="text-xs font-semibold text-slate-600">
+                Unit
+                <Select
+                  className="mt-1.5 w-full"
+                  value={form.unit}
+                  onChange={(e) => setForm({ ...form, unit: e.target.value })}
+                >
+                  <option value="PIECE">PIECE</option>
+                  <option value="KG">KG</option>
+                  <option value="LITRE">LITRE</option>
+                  <option value="PACKET">PACKET</option>
+                  <option value="BOX">BOX</option>
+                </Select>
+              </label>
+              <label className="text-xs font-semibold text-slate-600">
+                Cost price (₹)
+                <Input
+                  className="mt-1.5"
+                  type="number"
+                  step="0.01"
+                  value={form.buyingPrice}
+                  onChange={(e) =>
+                    setForm({ ...form, buyingPrice: Number(e.target.value) })
+                  }
+                />
+              </label>
+              <label className="text-xs font-semibold text-slate-600">
+                Selling price (₹) *
+                <Input
+                  className="mt-1.5"
+                  type="number"
+                  step="0.01"
+                  value={form.sellingPrice}
+                  onChange={(e) =>
+                    setForm({ ...form, sellingPrice: Number(e.target.value) })
+                  }
+                />
+              </label>
+              <label className="text-xs font-semibold text-slate-600">
+                MRP (₹)
+                <Input
+                  className="mt-1.5"
+                  type="number"
+                  step="0.01"
+                  value={form.mrp}
+                  onChange={(e) =>
+                    setForm({ ...form, mrp: Number(e.target.value) })
+                  }
+                />
+              </label>
+              <label className="text-xs font-semibold text-slate-600">
+                Discounted / Offer price (₹)
+                <Input
+                  className="mt-1.5"
+                  type="number"
+                  step="0.01"
+                  value={form.discountPrice}
+                  onChange={(e) =>
+                    setForm({ ...form, discountPrice: Number(e.target.value) })
+                  }
+                />
+              </label>
+              <label className="text-xs font-semibold text-slate-600">
+                Current Stock Quantity
+                <Input
+                  className="mt-1.5"
+                  type="number"
+                  value={form.stock}
+                  onChange={(e) =>
+                    setForm({ ...form, stock: Number(e.target.value) })
+                  }
+                />
+              </label>
+              <label className="text-xs font-semibold text-slate-600">
+                HSN / SAC
+                <Input
+                  className="mt-1.5"
+                  value={form.hsnSac}
+                  onChange={(e) => setForm({ ...form, hsnSac: e.target.value })}
+                  placeholder="e.g. 1512"
+                />
+              </label>
+              <label className="text-xs font-semibold text-slate-600 sm:col-span-2">
+                Sales Pitch Hook
+                <Input
+                  className="mt-1.5"
+                  value={form.pitchHook}
+                  onChange={(e) =>
+                    setForm({ ...form, pitchHook: e.target.value })
+                  }
+                  placeholder="Customer counter recommendation hook"
+                />
+              </label>
+            </div>
+          </div>
+          <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-between gap-2 border-t border-slate-100 p-3.5 sm:p-4">
+            <div className="flex flex-wrap items-center gap-2">
+              {!isNew && (product.sku || product.qrToken) && (
+                <Button
+                  variant="secondary"
+                  className="w-full sm:w-auto"
+                  onClick={() => onShowQr && onShowQr(product)}
+                >
+                  <Icon name="scan" size={15} />
+                  View / Print Barcode
+                </Button>
+              )}
+              {!isNew && product.id && (
+                <Button
+                  variant="danger"
+                  className="w-full sm:w-auto text-xs sm:text-sm"
+                  disabled={deleting || submitting}
+                  onClick={handleDelete}
+                >
+                  <Icon name="trash" size={14} />
+                  {deleting ? "Removing..." : "Remove from inventory"}
+                </Button>
+              )}
+            </div>
+            <div className="flex gap-2 w-full sm:w-auto">
+              <Button
+                variant="secondary"
+                className="flex-1 sm:flex-initial"
+                onClick={onClose}
+              >
+                Cancel
+              </Button>
+              <Button
+                disabled={submitting || deleting}
+                className="flex-1 sm:flex-initial"
+                onClick={handleSave}
+              >
+                <Icon name="check" size={16} />
+                {submitting ? "Saving..." : "Save product"}
+              </Button>
+            </div>
           </div>
         </div>
-        <Button disabled={enriching || !form.name.trim()} onClick={handleEnrich} type="button" variant="secondary" className="w-full sm:w-auto border-emerald-300 text-emerald-800 hover:bg-emerald-100 shrink-0">
-          <Icon name="search" size={14} />
-          {enriching ? "Searching..." : "Auto-fill from Web"}
-        </Button>
-      </div>
-
-      {webIntelligence && webIntelligence.sources.length > 0 && (
-        <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
-          <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-400">Web Sources Found</div>
-          <div className="space-y-1">
-            {webIntelligence.sources.slice(0, 3).map((s, idx) => (
-              <a className="block truncate text-xs text-blue-600 hover:underline" href={s.url} key={idx} rel="noopener noreferrer" target="_blank">
-                • {s.title || s.url}
-              </a>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <div className="grid gap-3 sm:gap-4 sm:grid-cols-2">
-        <label className="text-xs font-semibold text-slate-600 sm:col-span-2">Product name *<Input className="mt-1.5" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="e.g. Fortune Sunflower Oil 1L" /></label>
-        <label className="text-xs font-semibold text-slate-600">SKU / Code<Input className="mt-1.5" value={form.sku} onChange={e => setForm({ ...form, sku: e.target.value })} placeholder="Leave blank to auto-generate" /></label>
-        <label className="text-xs font-semibold text-slate-600">Category<Select className="mt-1.5 w-full" value={form.category} onChange={e => setForm({ ...form, category: e.target.value })}><option>Grocery</option><option>Home care</option><option>Personal care</option><option>Snacks</option><option>Beverages</option><option>General</option></Select></label>
-        <label className="text-xs font-semibold text-slate-600">Brand<Input className="mt-1.5" value={form.brand} onChange={e => setForm({ ...form, brand: e.target.value })} placeholder="e.g. Fortune" /></label>
-        <label className="text-xs font-semibold text-slate-600">Unit<Select className="mt-1.5 w-full" value={form.unit} onChange={e => setForm({ ...form, unit: e.target.value })}><option value="PIECE">PIECE</option><option value="KG">KG</option><option value="LITRE">LITRE</option><option value="PACKET">PACKET</option><option value="BOX">BOX</option></Select></label>
-        <label className="text-xs font-semibold text-slate-600">Cost price (₹)<Input className="mt-1.5" type="number" step="0.01" value={form.buyingPrice} onChange={e => setForm({ ...form, buyingPrice: Number(e.target.value) })} /></label>
-        <label className="text-xs font-semibold text-slate-600">Selling price (₹) *<Input className="mt-1.5" type="number" step="0.01" value={form.sellingPrice} onChange={e => setForm({ ...form, sellingPrice: Number(e.target.value) })} /></label>
-        <label className="text-xs font-semibold text-slate-600">MRP (₹)<Input className="mt-1.5" type="number" step="0.01" value={form.mrp} onChange={e => setForm({ ...form, mrp: Number(e.target.value) })} /></label>
-        <label className="text-xs font-semibold text-slate-600">Discounted / Offer price (₹)<Input className="mt-1.5" type="number" step="0.01" value={form.discountPrice} onChange={e => setForm({ ...form, discountPrice: Number(e.target.value) })} /></label>
-        <label className="text-xs font-semibold text-slate-600">Current Stock Quantity<Input className="mt-1.5" type="number" value={form.stock} onChange={e => setForm({ ...form, stock: Number(e.target.value) })} /></label>
-        <label className="text-xs font-semibold text-slate-600">HSN / SAC<Input className="mt-1.5" value={form.hsnSac} onChange={e => setForm({ ...form, hsnSac: e.target.value })} placeholder="e.g. 1512" /></label>
-        <label className="text-xs font-semibold text-slate-600 sm:col-span-2">Sales Pitch Hook<Input className="mt-1.5" value={form.pitchHook} onChange={e => setForm({ ...form, pitchHook: e.target.value })} placeholder="Customer counter recommendation hook" /></label>
-      </div>
+      </Card>
     </div>
-    <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-between gap-2 border-t border-slate-100 p-3.5 sm:p-4">
-      <div className="flex flex-wrap items-center gap-2">
-        {!isNew && (product.sku || product.qrToken) && (
-          <Button variant="secondary" className="w-full sm:w-auto" onClick={() => onShowQr && onShowQr(product)}>
-            <Icon name="scan" size={15} />View / Print Barcode
-          </Button>
-        )}
-        {!isNew && product.id && (
-          <Button variant="danger" className="w-full sm:w-auto text-xs sm:text-sm" disabled={deleting || submitting} onClick={handleDelete}>
-            <Icon name="trash" size={14} />
-            {deleting ? "Removing..." : "Remove from inventory"}
-          </Button>
-        )}
-      </div>
-      <div className="flex gap-2 w-full sm:w-auto">
-        <Button variant="secondary" className="flex-1 sm:flex-initial" onClick={onClose}>Cancel</Button>
-        <Button disabled={submitting || deleting} className="flex-1 sm:flex-initial" onClick={handleSave}>
-          <Icon name="check" size={16} />{submitting ? "Saving..." : "Save product"}
-        </Button>
-      </div>
-    </div></div></Card></div>;
+  );
 }
 
 function ProductsScreen({ onShowQr, onScanQr, printQueueCount = 0, onOpenPrintModal, onAddToPrintQueue }: { onShowQr?: (p: any) => void; onScanQr?: () => void; printQueueCount?: number; onOpenPrintModal?: () => void; onAddToPrintQueue?: (p: any) => void }) {
@@ -1087,6 +1434,7 @@ function ProductsScreen({ onShowQr, onScanQr, printQueueCount = 0, onOpenPrintMo
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("All status");
   const [selected, setSelected] = useState<ProductDetail | null>(null);
+  const [viewingProduct, setViewingProduct] = useState<ProductDetail | null>(null);
   const [isNewProduct, setIsNewProduct] = useState(false);
   const [importing, setImporting] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -1175,6 +1523,40 @@ function ProductsScreen({ onShowQr, onScanQr, printQueueCount = 0, onOpenPrintMo
 
   const totalStockUnits = useMemo(() => productsList.reduce((acc, p) => acc + Number(p.stock ?? 0), 0), [productsList]);
   const totalValuation = useMemo(() => productsList.reduce((acc, p) => acc + (Number(p.stock ?? 0) * Number(p.buyingPrice ?? p.lastPurchaseCost ?? 0)), 0), [productsList]);
+
+  if (viewingProduct) {
+    return (
+      <>
+        <ProductDetailsView
+          product={viewingProduct}
+          onBack={() => setViewingProduct(null)}
+          onEdit={(p) => {
+            setSelected(p);
+            setIsNewProduct(false);
+          }}
+          onShowQr={onShowQr}
+          onAddToPrintQueue={onAddToPrintQueue}
+        />
+        {selected && (
+          <ProductDialog
+            product={selected}
+            isNew={isNewProduct}
+            onClose={() => setSelected(null)}
+            onShowQr={onShowQr}
+            onSaved={() => {
+              loadProducts();
+              fetchShopProducts().then((res) => {
+                const refreshed = res.find((item) => item.id === viewingProduct.id);
+                if (refreshed) {
+                  setViewingProduct(refreshed);
+                }
+              });
+            }}
+          />
+        )}
+      </>
+    );
+  }
 
   return <>
     <PageHeader
@@ -1284,7 +1666,7 @@ function ProductsScreen({ onShowQr, onScanQr, printQueueCount = 0, onOpenPrintMo
       ) : filtered.length ? (
         <ProductTable
           productsList={filtered}
-          onProduct={(p) => { setSelected(p); setIsNewProduct(false); }}
+          onProduct={(p) => setViewingProduct(p)}
           onShowQr={onShowQr}
           onAddToPrintQueue={onAddToPrintQueue}
           selectedIds={selectedIds}
@@ -1420,6 +1802,13 @@ function InvoiceScanner() {
 
   const [items, setItems] = useState<ReviewItem[]>([]);
   const [scanStatus, setScanStatus] = useState<InvoiceJobStatus | null>(null);
+  const [currentJobId, setCurrentJobId] = useState<string | null>(null);
+  const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
+  const [activeJobs, setActiveJobs] = useState<InvoiceJobResponse[]>([]);
+  const [pendingNewScanFile, setPendingNewScanFile] = useState<{
+    file: File | null;
+  } | null>(null);
+  const [cancellingJobs, setCancellingJobs] = useState(false);
   const [spCalcMode, setSpCalcMode] = useState<"percentage" | "fixed_markup" | "fixed_price">("percentage");
   const [spCalcValue, setSpCalcValue] = useState<number>(20);
   const [spRoundToRupee, setSpRoundToRupee] = useState<boolean>(true);
@@ -1428,10 +1817,135 @@ function InvoiceScanner() {
 
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const handleFileUpload = async (file?: File | null) => {
+  const loadActiveJobs = useCallback(async () => {
+    try {
+      const jobs = await getActiveInvoiceJobs();
+      setActiveJobs(jobs);
+    } catch {
+      setActiveJobs([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadActiveJobs();
+  }, [loadActiveJobs]);
+
+  const applyScannedResult = useCallback(
+    (response: InvoiceScanResponse) => {
+      const invData = response.invoiceData;
+      setAvailableProducts(response.availableProducts || []);
+      setSourceFileUrl(response.sourceFileUrl || null);
+
+      if (invData.sellerName) setSupplierName(invData.sellerName);
+      if (invData.sellerGstin) setSupplierGstin(invData.sellerGstin);
+      if (invData.buyerName) setBuyerName(invData.buyerName);
+      if (invData.buyerGstin) setBuyerGstin(invData.buyerGstin);
+      if (invData.invoiceNumber) setInvoiceNumber(invData.invoiceNumber);
+      if (invData.invoiceDate) setInvoiceDate(invData.invoiceDate);
+      if (invData.paymentMode)
+        setPaymentMode(invData.paymentMode.toUpperCase());
+      if (invData.subTotal !== undefined && invData.subTotal !== null)
+        setSubtotal(Number(invData.subTotal));
+      if (
+        invData.totalTaxAmount !== undefined &&
+        invData.totalTaxAmount !== null
+      )
+        setTaxAmount(Number(invData.totalTaxAmount));
+
+      const billFinalAmount =
+        invData.totalAmount !== undefined && invData.totalAmount !== null
+          ? Number(invData.totalAmount)
+          : invData.grandTotal !== undefined && invData.grandTotal !== null
+            ? Number(invData.grandTotal)
+            : null;
+      if (billFinalAmount !== null && !isNaN(billFinalAmount)) {
+        setGrandTotal(billFinalAmount);
+      }
+
+      const reviewItems: ReviewItem[] = (invData.items || []).map(
+        (item, index) => {
+          const itemLower = (item.itemName || "").toLowerCase();
+          const matched = (response.availableProducts || []).find(
+            (p) =>
+              p.name.toLowerCase() === itemLower ||
+              itemLower.includes(p.name.toLowerCase()) ||
+              p.name.toLowerCase().includes(itemLower),
+          );
+
+          const cost = Number(item.pricePerUnit) || 0;
+          const computedAutoSp =
+            spCalcMode === "percentage"
+              ? cost + (cost * spCalcValue) / 100
+              : spCalcMode === "fixed_markup"
+                ? cost + spCalcValue
+                : spCalcValue;
+          const roundedAutoSp = spRoundToRupee
+            ? Math.max(0, Math.round(computedAutoSp))
+            : Math.max(0, Math.round(computedAutoSp * 100) / 100);
+          const defaultSelling = matched ? matched.sellingPrice : roundedAutoSp;
+          const defaultMrp =
+            matched && matched.mrp
+              ? matched.mrp
+              : spRoundToRupee
+                ? Math.round(defaultSelling * 1.15)
+                : Math.round(defaultSelling * 1.15 * 100) / 100;
+
+          const invDiscPct =
+            item.discountPercentage !== undefined &&
+            item.discountPercentage !== null
+              ? Number(item.discountPercentage)
+              : 0;
+          const invDiscAmt =
+            item.discountAmount !== undefined && item.discountAmount !== null
+              ? Number(item.discountAmount)
+              : 0;
+          const directLineTotal =
+            item.totalAmount !== undefined &&
+            item.totalAmount !== null &&
+            !isNaN(Number(item.totalAmount))
+              ? Number(item.totalAmount)
+              : Math.round(cost * (Number(item.quantity) || 1) * 100) / 100;
+
+          return {
+            id: `item-${index}-${Date.now()}`,
+            name: item.itemName,
+            matchedProductId: matched ? matched.id : null,
+            sku: matched ? matched.sku : "",
+            category: "General",
+            unit: item.unit || "Nos",
+            quantity: Number(item.quantity) || 1,
+            unitCost: cost,
+            taxRate: item.gstPercentage ? Number(item.gstPercentage) : 18,
+            taxAmount: item.gstAmount ? Number(item.gstAmount) : 0,
+            invoiceDiscountPercentage: invDiscPct,
+            invoiceDiscountAmount: invDiscAmt,
+            lineTotal: directLineTotal,
+            confidence: item.confidenceScore
+              ? Math.round(Number(item.confidenceScore) * 100)
+              : 92,
+            included: true,
+            sellingPrice: defaultSelling,
+            discountPercentage: invDiscPct > 0 ? invDiscPct : null,
+            mrp: defaultMrp,
+            description: "",
+            hsnSac: item.hsnSac || "",
+            showPitchInput: false,
+          };
+        },
+      );
+
+      setItems(reviewItems);
+      setStep(2);
+    },
+    [spCalcMode, spCalcValue, spRoundToRupee],
+  );
+
+  const executeFileUpload = async (file?: File | null) => {
     setError("");
     setLoading(true);
     setScanStatus(null);
+    setCurrentJobId(null);
+    setSelectedJobId(null);
 
     if (file) {
       setFileName(file.name);
@@ -1446,89 +1960,135 @@ function InvoiceScanner() {
     }
 
     try {
-      const response = await scanInvoiceFile(file, (status) => setScanStatus(status));
-      const invData = response.invoiceData;
-      setAvailableProducts(response.availableProducts || []);
-      setSourceFileUrl(response.sourceFileUrl || null);
-
-      if (invData.sellerName) setSupplierName(invData.sellerName);
-      if (invData.sellerGstin) setSupplierGstin(invData.sellerGstin);
-      if (invData.buyerName) setBuyerName(invData.buyerName);
-      if (invData.buyerGstin) setBuyerGstin(invData.buyerGstin);
-      if (invData.invoiceNumber) setInvoiceNumber(invData.invoiceNumber);
-      if (invData.invoiceDate) setInvoiceDate(invData.invoiceDate);
-      if (invData.paymentMode) setPaymentMode(invData.paymentMode.toUpperCase());
-      if (invData.subTotal !== undefined && invData.subTotal !== null) setSubtotal(Number(invData.subTotal));
-      if (invData.totalTaxAmount !== undefined && invData.totalTaxAmount !== null) setTaxAmount(Number(invData.totalTaxAmount));
-      
-      const billFinalAmount = invData.totalAmount !== undefined && invData.totalAmount !== null
-        ? Number(invData.totalAmount)
-        : invData.grandTotal !== undefined && invData.grandTotal !== null
-        ? Number(invData.grandTotal)
-        : null;
-      if (billFinalAmount !== null && !isNaN(billFinalAmount)) {
-        setGrandTotal(billFinalAmount);
+      const response = await scanInvoiceFile(
+        file,
+        (status) => setScanStatus(status),
+        (job) => {
+          setCurrentJobId(job.jobId);
+          setSelectedJobId(job.jobId);
+        },
+      );
+      applyScannedResult(response);
+      await loadActiveJobs();
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        if (err.message !== "Invoice processing was cancelled.") {
+          setError(err.message);
+        }
+      } else {
+        setError("Failed to scan invoice. Please try again.");
       }
+      await loadActiveJobs();
+    } finally {
+      setLoading(false);
+      setScanStatus(null);
+      setCurrentJobId(null);
+    }
+  };
 
-      const reviewItems: ReviewItem[] = (invData.items || []).map((item, index) => {
-        const itemLower = (item.itemName || "").toLowerCase();
-        const matched = (response.availableProducts || []).find(
-          (p) => p.name.toLowerCase() === itemLower || itemLower.includes(p.name.toLowerCase()) || p.name.toLowerCase().includes(itemLower)
+  const handleFileUpload = async (file?: File | null) => {
+    setError("");
+    let currentRunning = activeJobs;
+    try {
+      currentRunning = await getActiveInvoiceJobs();
+      setActiveJobs(currentRunning);
+    } catch {
+      currentRunning = activeJobs;
+    }
+
+    if (currentRunning.length > 0) {
+      setCancellingJobs(true);
+      try {
+        await cancelAllActiveInvoiceJobs();
+        setActiveJobs([]);
+      } catch {
+        setActiveJobs([]);
+      } finally {
+        setCancellingJobs(false);
+      }
+    }
+
+    await executeFileUpload(file);
+  };
+
+  const handleCheckExistingJob = async (job: InvoiceJobResponse) => {
+    setError("");
+    setLoading(true);
+    setFileName(job.originalFileName || "Purchase Invoice");
+    setFilePreview(null);
+    setScanStatus(job.status);
+    setCurrentJobId(job.jobId);
+    setSelectedJobId(job.jobId);
+
+    try {
+      if (job.status === "COMPLETED" && job.result) {
+        applyScannedResult(job.result);
+      } else {
+        const response = await pollInvoiceJobUntilComplete(
+          job.jobId,
+          (status) => setScanStatus(status),
         );
+        applyScannedResult(response);
+      }
+      await loadActiveJobs();
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        if (err.message !== "Invoice processing was cancelled.") {
+          setError(err.message);
+        }
+      } else {
+        setError("Failed to check invoice job.");
+      }
+      await loadActiveJobs();
+    } finally {
+      setLoading(false);
+      setScanStatus(null);
+      setCurrentJobId(null);
+    }
+  };
 
-        const cost = Number(item.pricePerUnit) || 0;
-        const computedAutoSp = spCalcMode === "percentage"
-          ? (cost + (cost * spCalcValue) / 100)
-          : spCalcMode === "fixed_markup"
-          ? (cost + spCalcValue)
-          : spCalcValue;
-        const roundedAutoSp = spRoundToRupee ? Math.max(0, Math.round(computedAutoSp)) : Math.max(0, Math.round(computedAutoSp * 100) / 100);
-        const defaultSelling = matched ? matched.sellingPrice : roundedAutoSp;
-        const defaultMrp = matched && matched.mrp ? matched.mrp : (spRoundToRupee ? Math.round(defaultSelling * 1.15) : Math.round(defaultSelling * 1.15 * 100) / 100);
-
-        const invDiscPct = item.discountPercentage !== undefined && item.discountPercentage !== null ? Number(item.discountPercentage) : 0;
-        const invDiscAmt = item.discountAmount !== undefined && item.discountAmount !== null ? Number(item.discountAmount) : 0;
-        const directLineTotal = item.totalAmount !== undefined && item.totalAmount !== null && !isNaN(Number(item.totalAmount))
-          ? Number(item.totalAmount)
-          : Math.round((cost * (Number(item.quantity) || 1)) * 100) / 100;
-
-        return {
-          id: `item-${index}-${Date.now()}`,
-          name: item.itemName,
-          matchedProductId: matched ? matched.id : null,
-          sku: matched ? matched.sku : "",
-          category: "General",
-          unit: item.unit || "Nos",
-          quantity: Number(item.quantity) || 1,
-          unitCost: cost,
-          taxRate: item.gstPercentage ? Number(item.gstPercentage) : 18,
-          taxAmount: item.gstAmount ? Number(item.gstAmount) : 0,
-          invoiceDiscountPercentage: invDiscPct,
-          invoiceDiscountAmount: invDiscAmt,
-          lineTotal: directLineTotal,
-          confidence: item.confidenceScore ? Math.round(Number(item.confidenceScore) * 100) : 92,
-          included: true,
-          sellingPrice: defaultSelling,
-          discountPercentage: invDiscPct > 0 ? invDiscPct : null,
-          mrp: defaultMrp,
-          description: "",
-          hsnSac: item.hsnSac || "",
-          showPitchInput: false,
-        };
-      });
-
-      setItems(reviewItems);
-      setStep(2);
+  const handleCancelJob = async (jobId: string) => {
+    setCancellingJobs(true);
+    setError("");
+    try {
+      await cancelInvoiceJob(jobId);
+      await loadActiveJobs();
+      if (currentJobId === jobId) {
+        setLoading(false);
+        setScanStatus(null);
+        setCurrentJobId(null);
+      }
     } catch (err: unknown) {
       if (err instanceof Error) {
         setError(err.message);
       } else {
-        setError("Failed to scan invoice. Please try again.");
+        setError("Failed to cancel job.");
       }
     } finally {
-      setLoading(false);
-      setScanStatus(null);
+      setCancellingJobs(false);
     }
+  };
+
+  const handleConfirmCancelAndScanNew = async () => {
+    if (!pendingNewScanFile) return;
+    const fileToScan = pendingNewScanFile.file;
+    setCancellingJobs(true);
+    setError("");
+    try {
+      await cancelAllActiveInvoiceJobs();
+      setActiveJobs([]);
+      setPendingNewScanFile(null);
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError("Failed to cancel active jobs.");
+      }
+      setCancellingJobs(false);
+      return;
+    }
+    setCancellingJobs(false);
+    await executeFileUpload(fileToScan);
   };
 
   const syncTotalsFromItems = () => {
@@ -1679,6 +2239,7 @@ function InvoiceScanner() {
 
     try {
       const payload: SavePurchaseInvoicePayload = {
+        jobId: selectedJobId || undefined,
         invoiceNumber: invoiceNumber.trim() || `INV-${Date.now()}`,
         invoiceDate: invoiceDate || new Date().toISOString().split("T")[0],
         paymentMode: paymentMode || "CREDIT",
@@ -1729,6 +2290,8 @@ function InvoiceScanner() {
       const saved = await savePurchaseInvoice(payload);
       setDuplicateConflict(null);
       setSuccessResult(saved);
+      setSelectedJobId(null);
+      await loadActiveJobs();
       setStep(3);
     } catch (err: unknown) {
       if (err instanceof DuplicateInvoiceError) {
@@ -1763,7 +2326,12 @@ function InvoiceScanner() {
       <div className="mb-5 flex items-center justify-between sm:justify-start overflow-x-auto pb-1">
         <Step number={1} label="Scan" active={step >= 1} done={step > 1} />
         <Line active={step > 1} />
-        <Step number={2} label="Review & Pricing" active={step >= 2} done={step > 2} />
+        <Step
+          number={2}
+          label="Review & Pricing"
+          active={step >= 2}
+          done={step > 2}
+        />
         <Line active={step > 2} />
         <Step number={3} label="Saved" active={step >= 3} done={step === 3} />
       </div>
@@ -1775,94 +2343,251 @@ function InvoiceScanner() {
         </div>
       )}
 
-      {step === 1 && (
-        loading ? (
-          <InvoiceScanningOverlay fileName={fileName} filePreview={filePreview} status={scanStatus} />
+      {step === 1 &&
+        (loading ? (
+          <InvoiceScanningOverlay
+            fileName={fileName}
+            filePreview={filePreview}
+            status={scanStatus}
+            onCancel={
+              currentJobId ? () => handleCancelJob(currentJobId) : undefined
+            }
+            cancelling={cancellingJobs}
+          />
         ) : (
-          <Card className="p-5">
-            <div className="grid min-h-[460px] gap-6 lg:grid-cols-2">
-              <button
-                onClick={() => fileRef.current?.click()}
-                className="group grid place-items-center rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50 p-8 text-center transition hover:border-emerald-500 hover:bg-emerald-50/20"
-                disabled={loading}
-              >
-                <input
-                  ref={fileRef}
-                  className="hidden"
-                  type="file"
-                  accept=".pdf,image/png,image/jpeg,image/webp"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) handleFileUpload(f);
-                  }}
-                />
-                <div>
-                  <span className="mx-auto grid size-16 place-items-center rounded-2xl bg-emerald-100 text-emerald-700 transition group-hover:scale-105">
-                    <Icon name="scan" size={30} />
+          <div className="space-y-4">
+            {activeJobs.length > 0 && (
+              <Card className="border-amber-200 bg-amber-50/40 p-4">
+                <div className="flex items-start gap-3">
+                  <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-amber-100 text-amber-700">
+                    <Icon name="scan" size={20} />
                   </span>
-                  <h2 className="mt-4 text-base font-bold text-slate-900">Upload supplier invoice</h2>
-                  <p className="mx-auto mt-2 max-w-xs text-xs leading-5 text-slate-500">
-                    Select a PNG, JPG, or PDF purchase invoice. Multi-modal AI will extract vendor information, line items, rates, discounts and taxes.
-                  </p>
-                  <div className="mt-6 flex flex-wrap justify-center gap-2">
-                    <Button
-                      type="button"
-                      disabled={loading}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        fileRef.current?.click();
-                      }}
-                    >
-                      <Icon name="upload" size={16} />
-                      {loading ? "Extracting invoice…" : "Select Invoice File"}
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      disabled={loading}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleFileUpload(null);
-                      }}
-                    >
-                      Load Sample Invoice
-                    </Button>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <h3 className="text-sm font-bold text-slate-900">
+                          Recent Unsaved &amp; In-Progress Invoice Scans
+                        </h3>
+                        <p className="text-xs text-slate-600">
+                          {activeJobs.length === 1
+                            ? activeJobs[0].status === "COMPLETED"
+                              ? "1 scanned invoice is ready to review and save to inventory."
+                              : "1 invoice scan job is currently processing in the background."
+                            : `${activeJobs.length} invoice scan jobs are ready for review or processing in the background.`}
+                        </p>
+                      </div>
+                      <Button
+                        variant="ghost"
+                        className="h-8 text-xs"
+                        onClick={loadActiveJobs}
+                      >
+                        <Icon name="refresh" size={14} />
+                        Refresh
+                      </Button>
+                    </div>
+
+                    <div className="mt-3 space-y-2.5">
+                      {activeJobs.map((job) => {
+                        const imageName =
+                          job.originalFileName || "invoice image";
+                        const isCompleted = job.status === "COMPLETED";
+                        return (
+                          <div
+                            key={job.jobId}
+                            className={`flex flex-col justify-between gap-3 rounded-xl border bg-white p-3.5 shadow-2xs sm:flex-row sm:items-center ${
+                              isCompleted
+                                ? "border-emerald-200"
+                                : "border-amber-200/80"
+                            }`}
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                {isCompleted ? (
+                                  <span className="grid size-5 shrink-0 place-items-center rounded-full bg-emerald-100 text-emerald-700">
+                                    <Icon name="check" size={12} />
+                                  </span>
+                                ) : (
+                                  <span className="relative flex size-2.5 shrink-0">
+                                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75"></span>
+                                    <span className="relative inline-flex size-2.5 rounded-full bg-amber-500"></span>
+                                  </span>
+                                )}
+                                <p className="text-xs sm:text-sm font-semibold text-slate-900">
+                                  {isCompleted ? (
+                                    <>
+                                      You recently scanned{" "}
+                                      <span className="text-emerald-700 font-bold">
+                                        {imageName}
+                                      </span>{" "}
+                                      and the result is ready. Do you want to review and save it?
+                                    </>
+                                  ) : (
+                                    <>
+                                      You recently uploaded{" "}
+                                      <span className="text-emerald-700 font-bold">
+                                        {imageName}
+                                      </span>{" "}
+                                      and it is still processing. Do you want to
+                                      check this?
+                                    </>
+                                  )}
+                                </p>
+                                <Badge tone={isCompleted ? "success" : "warning"}>
+                                  {isCompleted ? "READY TO SAVE" : job.status}
+                                </Badge>
+                              </div>
+                            </div>
+
+                            <div className="flex flex-wrap items-center gap-2 shrink-0">
+                              <Button
+                                type="button"
+                                className="h-8 text-xs"
+                                disabled={cancellingJobs}
+                                onClick={() => handleCheckExistingJob(job)}
+                              >
+                                <Icon name={isCompleted ? "check" : "scan"} size={14} />
+                                {isCompleted ? "Review & Save Result" : "Check This Job"}
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="danger"
+                                className="h-8 text-xs"
+                                disabled={cancellingJobs}
+                                onClick={() => handleCancelJob(job.jobId)}
+                              >
+                                <Icon name="close" size={14} />
+                                {cancellingJobs
+                                  ? "Cancelling..."
+                                  : isCompleted
+                                    ? "Discard"
+                                    : "Cancel Job"}
+                              </Button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
-              </button>
+              </Card>
+            )}
 
-              <div className="flex flex-col justify-between rounded-2xl border border-slate-200 bg-white p-6">
-                <div>
-                  <h3 className="font-bold text-slate-900">Automated Intake Process</h3>
-                  <div className="mt-5 space-y-4">
-                    <div className="flex gap-3">
-                      <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-emerald-50 text-xs font-bold text-emerald-700">1</span>
-                      <div>
-                        <h4 className="text-xs font-bold text-slate-800">OCR & Document Parsing</h4>
-                        <p className="mt-0.5 text-xs leading-5 text-slate-500">Extracts seller, buyer (Bill To), HSN/SAC codes, row discounts, GST %, and totals.</p>
-                      </div>
+            <Card className="p-5">
+              <div className="grid min-h-[460px] gap-6 lg:grid-cols-2">
+                <button
+                  onClick={() => fileRef.current?.click()}
+                  className="group grid place-items-center rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50 p-8 text-center transition hover:border-emerald-500 hover:bg-emerald-50/20"
+                  disabled={loading}
+                >
+                  <input
+                    ref={fileRef}
+                    className="hidden"
+                    type="file"
+                    accept=".pdf,image/png,image/jpeg,image/webp"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) handleFileUpload(f);
+                      e.target.value = "";
+                    }}
+                  />
+                  <div>
+                    <span className="mx-auto grid size-16 place-items-center rounded-2xl bg-emerald-100 text-emerald-700 transition group-hover:scale-105">
+                      <Icon name="scan" size={30} />
+                    </span>
+                    <h2 className="mt-4 text-base font-bold text-slate-900">
+                      Upload supplier invoice
+                    </h2>
+                    <p className="mx-auto mt-2 max-w-xs text-xs leading-5 text-slate-500">
+                      Select a PNG, JPG, or PDF purchase invoice. Multi-modal AI
+                      will extract vendor information, line items, rates,
+                      discounts and taxes.
+                    </p>
+                    <div className="mt-6 flex flex-wrap justify-center gap-2">
+                      <Button
+                        type="button"
+                        disabled={loading}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          fileRef.current?.click();
+                        }}
+                      >
+                        <Icon name="upload" size={16} />
+                        {loading
+                          ? "Extracting invoice…"
+                          : "Select Invoice File"}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        disabled={loading}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleFileUpload(null);
+                        }}
+                      >
+                        Load Sample Invoice
+                      </Button>
                     </div>
-                    <div className="flex gap-3">
-                      <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-emerald-50 text-xs font-bold text-emerald-700">2</span>
-                      <div>
-                        <h4 className="text-xs font-bold text-slate-800">Catalogue Matching & Pricing Review</h4>
-                        <p className="mt-0.5 text-xs leading-5 text-slate-500">Matches existing products. Set Selling Price, MRP, Retail Discount %, editable line totals, and pitch descriptions.</p>
+                  </div>
+                </button>
+
+                <div className="flex flex-col justify-between rounded-2xl border border-slate-200 bg-white p-6">
+                  <div>
+                    <h3 className="font-bold text-slate-900">
+                      Automated Intake Process
+                    </h3>
+                    <div className="mt-5 space-y-4">
+                      <div className="flex gap-3">
+                        <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-emerald-50 text-xs font-bold text-emerald-700">
+                          1
+                        </span>
+                        <div>
+                          <h4 className="text-xs font-bold text-slate-800">
+                            OCR & Document Parsing
+                          </h4>
+                          <p className="mt-0.5 text-xs leading-5 text-slate-500">
+                            Extracts seller, buyer (Bill To), HSN/SAC codes, row
+                            discounts, GST %, and totals.
+                          </p>
+                        </div>
                       </div>
-                    </div>
-                    <div className="flex gap-3">
-                      <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-emerald-50 text-xs font-bold text-emerald-700">3</span>
-                      <div>
-                        <h4 className="text-xs font-bold text-slate-800">Instant Inventory & Cost Ledger Update</h4>
-                        <p className="mt-0.5 text-xs leading-5 text-slate-500">Increments stock on hand, recalculates weighted average purchase cost, and writes stock movement entries.</p>
+                      <div className="flex gap-3">
+                        <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-emerald-50 text-xs font-bold text-emerald-700">
+                          2
+                        </span>
+                        <div>
+                          <h4 className="text-xs font-bold text-slate-800">
+                            Catalogue Matching & Pricing Review
+                          </h4>
+                          <p className="mt-0.5 text-xs leading-5 text-slate-500">
+                            Matches existing products. Set Selling Price, MRP,
+                            Retail Discount %, editable line totals, and pitch
+                            descriptions.
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex gap-3">
+                        <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-emerald-50 text-xs font-bold text-emerald-700">
+                          3
+                        </span>
+                        <div>
+                          <h4 className="text-xs font-bold text-slate-800">
+                            Instant Inventory & Cost Ledger Update
+                          </h4>
+                          <p className="mt-0.5 text-xs leading-5 text-slate-500">
+                            Increments stock on hand, recalculates weighted
+                            average purchase cost, and writes stock movement
+                            entries.
+                          </p>
+                        </div>
                       </div>
                     </div>
                   </div>
                 </div>
               </div>
-            </div>
-          </Card>
-        )
-      )}
+            </Card>
+          </div>
+        ))}
 
       {step === 2 && (
         <div className="space-y-4">
@@ -1870,20 +2595,32 @@ function InvoiceScanner() {
             <div className="flex flex-col justify-between gap-3 border-b border-slate-100 p-4 sm:flex-row sm:items-center">
               <div>
                 <div className="flex items-center gap-2">
-                  <h2 className="font-bold text-slate-900">Review & Set Retail Pricing</h2>
+                  <h2 className="font-bold text-slate-900">
+                    Review & Set Retail Pricing
+                  </h2>
                   <Badge tone="success">Extracted</Badge>
                 </div>
                 <p className="mt-0.5 text-xs text-slate-500">
-                  {items.length} items extracted from {fileName}. Adjust selling price, MRP, discount percentage, line totals, and optional pitch descriptions.
+                  {items.length} items extracted from {fileName}. Adjust selling
+                  price, MRP, discount percentage, line totals, and optional
+                  pitch descriptions.
                 </p>
               </div>
 
               <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
-                <Button variant="secondary" className="flex-1 sm:flex-initial text-xs sm:text-sm" onClick={() => setShowPreviewModal(true)}>
+                <Button
+                  variant="secondary"
+                  className="flex-1 sm:flex-initial text-xs sm:text-sm"
+                  onClick={() => setShowPreviewModal(true)}
+                >
                   <Icon name="file" size={15} />
                   View Original Document
                 </Button>
-                <Button variant="ghost" className="text-xs sm:text-sm" onClick={() => setStep(1)}>
+                <Button
+                  variant="ghost"
+                  className="text-xs sm:text-sm"
+                  onClick={() => setStep(1)}
+                >
                   Rescan
                 </Button>
               </div>
@@ -1892,32 +2629,61 @@ function InvoiceScanner() {
             <div className="grid gap-3 border-b border-slate-100 bg-slate-50/70 p-4 sm:grid-cols-2 lg:grid-cols-4">
               <label className="text-xs font-semibold text-slate-600">
                 Seller (Supplier)
-                <Input className="mt-1" value={supplierName} onChange={(e) => setSupplierName(e.target.value)} />
+                <Input
+                  className="mt-1"
+                  value={supplierName}
+                  onChange={(e) => setSupplierName(e.target.value)}
+                />
               </label>
               <label className="text-xs font-semibold text-slate-600">
                 Seller GSTIN
-                <Input className="mt-1" value={supplierGstin} onChange={(e) => setSupplierGstin(e.target.value)} />
+                <Input
+                  className="mt-1"
+                  value={supplierGstin}
+                  onChange={(e) => setSupplierGstin(e.target.value)}
+                />
               </label>
               <label className="text-xs font-semibold text-slate-600">
                 Buyer (Bill To)
-                <Input className="mt-1" value={buyerName} onChange={(e) => setBuyerName(e.target.value)} />
+                <Input
+                  className="mt-1"
+                  value={buyerName}
+                  onChange={(e) => setBuyerName(e.target.value)}
+                />
               </label>
               <label className="text-xs font-semibold text-slate-600">
                 Buyer GSTIN
-                <Input className="mt-1" value={buyerGstin} onChange={(e) => setBuyerGstin(e.target.value)} />
+                <Input
+                  className="mt-1"
+                  value={buyerGstin}
+                  onChange={(e) => setBuyerGstin(e.target.value)}
+                />
               </label>
 
               <label className="text-xs font-semibold text-slate-600">
                 Invoice Number
-                <Input className="mt-1" value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} />
+                <Input
+                  className="mt-1"
+                  value={invoiceNumber}
+                  onChange={(e) => setInvoiceNumber(e.target.value)}
+                />
               </label>
               <label className="text-xs font-semibold text-slate-600">
                 Invoice Date
-                <Input className="mt-1" type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} />
+                <Input
+                  className="mt-1"
+                  type="date"
+                  value={invoiceDate}
+                  onChange={(e) => setInvoiceDate(e.target.value)}
+                />
               </label>
               <label className="text-xs font-semibold text-slate-600">
                 Payment Mode
-                <Select className="mt-1 w-full" value={paymentMode} onChange={(e) => setPaymentMode(e.target.value)}>
+                <Select
+                  className="mt-1 w-full"
+                  value={paymentMode}
+                  onChange={(e) => setPaymentMode(e.target.value)}
+                >
                   <option value="CREDIT">CREDIT</option>
                   <option value="CASH">CASH</option>
                   <option value="UPI">UPI</option>
@@ -1926,7 +2692,11 @@ function InvoiceScanner() {
               </label>
               <label className="text-xs font-semibold text-slate-600">
                 Supplier Phone
-                <Input className="mt-1" value={supplierPhone} onChange={(e) => setSupplierPhone(e.target.value)} />
+                <Input
+                  className="mt-1"
+                  value={supplierPhone}
+                  onChange={(e) => setSupplierPhone(e.target.value)}
+                />
               </label>
             </div>
 
@@ -1981,7 +2751,9 @@ function InvoiceScanner() {
                     <span className="grid size-7 place-items-center rounded-lg bg-emerald-600 text-white">
                       <Icon name="tag" size={14} />
                     </span>
-                    <h3 className="text-sm font-bold text-slate-900">Auto Calculate Selling Price (SP)</h3>
+                    <h3 className="text-sm font-bold text-slate-900">
+                      Auto Calculate Selling Price (SP)
+                    </h3>
                     {spAppliedMessage && (
                       <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-semibold text-emerald-800">
                         {spAppliedMessage}
@@ -1989,7 +2761,8 @@ function InvoiceScanner() {
                     )}
                   </div>
                   <p className="mt-1 text-xs text-slate-500">
-                    Quickly compute and batch apply selling prices across extracted invoice products.
+                    Quickly compute and batch apply selling prices across
+                    extracted invoice products.
                   </p>
                 </div>
 
@@ -2003,7 +2776,8 @@ function InvoiceScanner() {
                     }`}
                     onClick={() => {
                       setSpCalcMode("percentage");
-                      if (spCalcValue === 50 || spCalcValue === 199) setSpCalcValue(20);
+                      if (spCalcValue === 50 || spCalcValue === 199)
+                        setSpCalcValue(20);
                     }}
                   >
                     Percentage (% on Cost)
@@ -2017,7 +2791,8 @@ function InvoiceScanner() {
                     }`}
                     onClick={() => {
                       setSpCalcMode("fixed_markup");
-                      if (spCalcValue === 20 || spCalcValue === 199) setSpCalcValue(50);
+                      if (spCalcValue === 20 || spCalcValue === 199)
+                        setSpCalcValue(50);
                     }}
                   >
                     Fixed Markup (+₹ on Cost)
@@ -2031,7 +2806,8 @@ function InvoiceScanner() {
                     }`}
                     onClick={() => {
                       setSpCalcMode("fixed_price");
-                      if (spCalcValue === 20 || spCalcValue === 50) setSpCalcValue(199);
+                      if (spCalcValue === 20 || spCalcValue === 50)
+                        setSpCalcValue(199);
                     }}
                   >
                     Flat Price (Fixed ₹)
@@ -2042,7 +2818,11 @@ function InvoiceScanner() {
               <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-12 lg:items-end">
                 <div className="sm:col-span-1 lg:col-span-3">
                   <label className="block text-xs font-semibold text-slate-700">
-                    {spCalcMode === "percentage" ? "Margin / Markup Percentage" : spCalcMode === "fixed_markup" ? "Fixed Markup Amount (₹)" : "Fixed Selling Price (₹)"}
+                    {spCalcMode === "percentage"
+                      ? "Margin / Markup Percentage"
+                      : spCalcMode === "fixed_markup"
+                        ? "Fixed Markup Amount (₹)"
+                        : "Fixed Selling Price (₹)"}
                   </label>
                   <div className="mt-1 flex items-center">
                     <span className="inline-flex h-9 items-center rounded-l-lg border border-r-0 border-slate-200 bg-slate-100 px-3 text-xs font-bold text-slate-600">
@@ -2060,9 +2840,16 @@ function InvoiceScanner() {
                 </div>
 
                 <div className="sm:col-span-1 lg:col-span-4">
-                  <span className="block text-xs font-semibold text-slate-700">Quick Presets</span>
+                  <span className="block text-xs font-semibold text-slate-700">
+                    Quick Presets
+                  </span>
                   <div className="mt-1 flex flex-wrap gap-1">
-                    {(spCalcMode === "percentage" ? [10, 15, 20, 25, 30, 40, 50] : spCalcMode === "fixed_markup" ? [10, 25, 50, 100, 200] : [49, 99, 149, 199, 299, 499]).map((val) => (
+                    {(spCalcMode === "percentage"
+                      ? [10, 15, 20, 25, 30, 40, 50]
+                      : spCalcMode === "fixed_markup"
+                        ? [10, 25, 50, 100, 200]
+                        : [49, 99, 149, 199, 299, 499]
+                    ).map((val) => (
                       <button
                         key={val}
                         type="button"
@@ -2073,7 +2860,11 @@ function InvoiceScanner() {
                         }`}
                         onClick={() => setSpCalcValue(val)}
                       >
-                        {spCalcMode === "percentage" ? `+${val}%` : spCalcMode === "fixed_markup" ? `+₹${val}` : `₹${val}`}
+                        {spCalcMode === "percentage"
+                          ? `+${val}%`
+                          : spCalcMode === "fixed_markup"
+                            ? `+₹${val}`
+                            : `₹${val}`}
                       </button>
                     ))}
                   </div>
@@ -2110,32 +2901,44 @@ function InvoiceScanner() {
                       <Icon name="tag" size={15} />
                       Apply to All ({items.length})
                     </Button>
-                    {activeItems.length !== items.length && activeItems.length > 0 && (
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        onClick={() => applySpToItems("selected")}
-                        className="text-xs sm:text-sm whitespace-nowrap"
-                      >
-                        Apply to Selected ({activeItems.length})
-                      </Button>
-                    )}
+                    {activeItems.length !== items.length &&
+                      activeItems.length > 0 && (
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          onClick={() => applySpToItems("selected")}
+                          className="text-xs sm:text-sm whitespace-nowrap"
+                        >
+                          Apply to Selected ({activeItems.length})
+                        </Button>
+                      )}
                   </div>
                 </div>
               </div>
 
               <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-emerald-100/60 pt-3 text-[11px] text-slate-600">
                 <div className="flex items-center gap-1.5">
-                  <span className="font-semibold text-slate-700">Formula Rule:</span>
+                  <span className="font-semibold text-slate-700">
+                    Formula Rule:
+                  </span>
                   <span className="rounded bg-white px-2 py-0.5 font-medium border border-slate-200">
                     {spCalcMode === "percentage"
                       ? `SP = Buying Cost + ${spCalcValue}%`
                       : spCalcMode === "fixed_markup"
-                      ? `SP = Buying Cost + ₹${spCalcValue}`
-                      : `SP = Flat ₹${spCalcValue}`}
+                        ? `SP = Buying Cost + ₹${spCalcValue}`
+                        : `SP = Flat ₹${spCalcValue}`}
                   </span>
                   <span>
-                    (e.g., Cost ₹100.00 will become SP {currency(computeSp(100, spCalcMode, Number(spCalcValue) || 0, spRoundToRupee))})
+                    (e.g., Cost ₹100.00 will become SP{" "}
+                    {currency(
+                      computeSp(
+                        100,
+                        spCalcMode,
+                        Number(spCalcValue) || 0,
+                        spRoundToRupee,
+                      ),
+                    )}
+                    )
                   </span>
                 </div>
               </div>
@@ -2154,7 +2957,10 @@ function InvoiceScanner() {
                 </label>
                 <span className="text-slate-400">|</span>
                 <span className="text-slate-500">
-                  <strong className="text-slate-900">{activeItems.length}</strong> of {items.length} items selected for import
+                  <strong className="text-slate-900">
+                    {activeItems.length}
+                  </strong>{" "}
+                  of {items.length} items selected for import
                 </span>
               </div>
 
@@ -2179,24 +2985,41 @@ function InvoiceScanner() {
 
             <div className="divide-y divide-slate-100">
               {items.map((item, index) => (
-                <div key={item.id} className={`p-4 transition ${!item.included ? "bg-slate-50/60 opacity-60" : "hover:bg-slate-50/30"}`}>
+                <div
+                  key={item.id}
+                  className={`p-4 transition ${!item.included ? "bg-slate-50/60 opacity-60" : "hover:bg-slate-50/30"}`}
+                >
                   <div className="flex items-start gap-3">
                     <input
                       checked={item.included}
                       className="mt-2 size-4 accent-emerald-600"
                       type="checkbox"
-                      onChange={(e) => updateItem(index, "included", e.target.checked)}
+                      onChange={(e) =>
+                        updateItem(index, "included", e.target.checked)
+                      }
                     />
                     <div className="min-w-0 flex-1 space-y-3">
                       <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-center">
                         <div className="flex items-center gap-2">
-                          <span className="text-xs font-bold text-slate-500">#{index + 1}</span>
+                          <span className="text-xs font-bold text-slate-500">
+                            #{index + 1}
+                          </span>
                           <Input
                             className="h-8 max-w-sm font-semibold text-slate-900"
                             value={item.name}
-                            onChange={(e) => updateItem(index, "name", e.target.value)}
+                            onChange={(e) =>
+                              updateItem(index, "name", e.target.value)
+                            }
                           />
-                          <Badge tone={item.confidence >= 90 ? "success" : item.confidence >= 70 ? "info" : "warning"}>
+                          <Badge
+                            tone={
+                              item.confidence >= 90
+                                ? "success"
+                                : item.confidence >= 70
+                                  ? "info"
+                                  : "warning"
+                            }
+                          >
                             {item.confidence}% Match
                           </Badge>
                         </div>
@@ -2205,9 +3028,17 @@ function InvoiceScanner() {
                           <button
                             type="button"
                             className="text-xs font-semibold text-emerald-700 hover:text-emerald-800"
-                            onClick={() => updateItem(index, "showPitchInput", !item.showPitchInput)}
+                            onClick={() =>
+                              updateItem(
+                                index,
+                                "showPitchInput",
+                                !item.showPitchInput,
+                              )
+                            }
                           >
-                            {item.showPitchInput ? "Hide Pitch Notes" : "+ Add Pitch Description"}
+                            {item.showPitchInput
+                              ? "Hide Pitch Notes"
+                              : "+ Add Pitch Description"}
                           </button>
                         </div>
                       </div>
@@ -2218,7 +3049,13 @@ function InvoiceScanner() {
                           <Select
                             className="mt-1 w-full text-xs"
                             value={item.matchedProductId || ""}
-                            onChange={(e) => updateItem(index, "matchedProductId", e.target.value || null)}
+                            onChange={(e) =>
+                              updateItem(
+                                index,
+                                "matchedProductId",
+                                e.target.value || null,
+                              )
+                            }
                           >
                             <option value="">Create as new product</option>
                             {availableProducts.map((p) => (
@@ -2235,7 +3072,9 @@ function InvoiceScanner() {
                             className="mt-1 text-xs"
                             placeholder="HSN code"
                             value={item.hsnSac}
-                            onChange={(e) => updateItem(index, "hsnSac", e.target.value)}
+                            onChange={(e) =>
+                              updateItem(index, "hsnSac", e.target.value)
+                            }
                           />
                         </label>
 
@@ -2247,12 +3086,20 @@ function InvoiceScanner() {
                               type="number"
                               min={1}
                               value={item.quantity}
-                              onChange={(e) => updateItem(index, "quantity", Number(e.target.value))}
+                              onChange={(e) =>
+                                updateItem(
+                                  index,
+                                  "quantity",
+                                  Number(e.target.value),
+                                )
+                              }
                             />
                             <Input
                               className="w-1/2 min-w-0 text-xs"
                               value={item.unit}
-                              onChange={(e) => updateItem(index, "unit", e.target.value)}
+                              onChange={(e) =>
+                                updateItem(index, "unit", e.target.value)
+                              }
                             />
                           </div>
                         </label>
@@ -2264,7 +3111,13 @@ function InvoiceScanner() {
                             type="number"
                             step="0.01"
                             value={item.unitCost}
-                            onChange={(e) => updateItem(index, "unitCost", Number(e.target.value))}
+                            onChange={(e) =>
+                              updateItem(
+                                index,
+                                "unitCost",
+                                Number(e.target.value),
+                              )
+                            }
                           />
                         </label>
 
@@ -2277,7 +3130,13 @@ function InvoiceScanner() {
                               step="0.1"
                               placeholder="%"
                               value={item.invoiceDiscountPercentage || ""}
-                              onChange={(e) => updateItem(index, "invoiceDiscountPercentage", Number(e.target.value))}
+                              onChange={(e) =>
+                                updateItem(
+                                  index,
+                                  "invoiceDiscountPercentage",
+                                  Number(e.target.value),
+                                )
+                              }
                             />
                             <Input
                               className="w-1/2 min-w-0 text-xs"
@@ -2285,7 +3144,13 @@ function InvoiceScanner() {
                               step="0.01"
                               placeholder="₹"
                               value={item.invoiceDiscountAmount || ""}
-                              onChange={(e) => updateItem(index, "invoiceDiscountAmount", Number(e.target.value))}
+                              onChange={(e) =>
+                                updateItem(
+                                  index,
+                                  "invoiceDiscountAmount",
+                                  Number(e.target.value),
+                                )
+                              }
                             />
                           </div>
                         </label>
@@ -2298,7 +3163,13 @@ function InvoiceScanner() {
                               type="number"
                               placeholder="%"
                               value={item.taxRate}
-                              onChange={(e) => updateItem(index, "taxRate", Number(e.target.value))}
+                              onChange={(e) =>
+                                updateItem(
+                                  index,
+                                  "taxRate",
+                                  Number(e.target.value),
+                                )
+                              }
                             />
                             <Input
                               className="w-1/2 min-w-0 text-xs"
@@ -2306,7 +3177,13 @@ function InvoiceScanner() {
                               step="0.01"
                               placeholder="₹"
                               value={item.taxAmount}
-                              onChange={(e) => updateItem(index, "taxAmount", Number(e.target.value))}
+                              onChange={(e) =>
+                                updateItem(
+                                  index,
+                                  "taxAmount",
+                                  Number(e.target.value),
+                                )
+                              }
                             />
                           </div>
                         </label>
@@ -2318,7 +3195,13 @@ function InvoiceScanner() {
                             type="number"
                             step="0.01"
                             value={item.lineTotal}
-                            onChange={(e) => updateItem(index, "lineTotal", Number(e.target.value))}
+                            onChange={(e) =>
+                              updateItem(
+                                index,
+                                "lineTotal",
+                                Number(e.target.value),
+                              )
+                            }
                           />
                         </label>
                       </div>
@@ -2326,13 +3209,28 @@ function InvoiceScanner() {
                       <div className="grid gap-3 rounded-lg border border-slate-200/80 bg-slate-50/50 p-3 sm:grid-cols-2 lg:grid-cols-4">
                         <label className="text-[11px] font-bold text-emerald-700">
                           <div className="flex items-center justify-between">
-                            <span>Selling Price (₹) <span className="text-rose-500">*</span></span>
+                            <span>
+                              Selling Price (₹){" "}
+                              <span className="text-rose-500">*</span>
+                            </span>
                             {(() => {
-                              const profit = (item.sellingPrice || 0) - (item.unitCost || 0);
-                              const pct = item.unitCost > 0 ? Math.round((profit / item.unitCost) * 100 * 10) / 10 : 0;
+                              const profit =
+                                (item.sellingPrice || 0) - (item.unitCost || 0);
+                              const pct =
+                                item.unitCost > 0
+                                  ? Math.round(
+                                      (profit / item.unitCost) * 100 * 10,
+                                    ) / 10
+                                  : 0;
                               return (
-                                <span className={`rounded px-1.5 py-0.2 text-[10px] font-bold ${profit > 0 ? "bg-emerald-100 text-emerald-800" : profit === 0 ? "bg-slate-200 text-slate-700" : "bg-rose-100 text-rose-800"}`}>
-                                  {profit > 0 ? `+${pct}% (+₹${profit})` : profit === 0 ? "0% (Cost)" : `${pct}% (Loss)`}
+                                <span
+                                  className={`rounded px-1.5 py-0.2 text-[10px] font-bold ${profit > 0 ? "bg-emerald-100 text-emerald-800" : profit === 0 ? "bg-slate-200 text-slate-700" : "bg-rose-100 text-rose-800"}`}
+                                >
+                                  {profit > 0
+                                    ? `+${pct}% (+₹${profit})`
+                                    : profit === 0
+                                      ? "0% (Cost)"
+                                      : `${pct}% (Loss)`}
                                 </span>
                               );
                             })()}
@@ -2343,7 +3241,13 @@ function InvoiceScanner() {
                               type="number"
                               step="0.01"
                               value={item.sellingPrice}
-                              onChange={(e) => updateItem(index, "sellingPrice", Number(e.target.value))}
+                              onChange={(e) =>
+                                updateItem(
+                                  index,
+                                  "sellingPrice",
+                                  Number(e.target.value),
+                                )
+                              }
                               required
                             />
                             <button
@@ -2358,14 +3262,23 @@ function InvoiceScanner() {
                         </label>
 
                         <label className="text-[11px] font-semibold text-slate-600">
-                          MRP (₹) <span className="font-normal text-slate-400">(optional)</span>
+                          MRP (₹){" "}
+                          <span className="font-normal text-slate-400">
+                            (optional)
+                          </span>
                           <Input
                             className="mt-1 text-xs"
                             type="number"
                             step="0.01"
                             placeholder="Optional"
                             value={item.mrp !== null ? item.mrp : ""}
-                            onChange={(e) => updateItem(index, "mrp", e.target.value ? Number(e.target.value) : null)}
+                            onChange={(e) =>
+                              updateItem(
+                                index,
+                                "mrp",
+                                e.target.value ? Number(e.target.value) : null,
+                              )
+                            }
                           />
                         </label>
 
@@ -2376,7 +3289,13 @@ function InvoiceScanner() {
                               <button
                                 type="button"
                                 className="text-[10px] font-medium text-emerald-700 underline"
-                                onClick={() => updateItem(index, "discountPercentage", item.invoiceDiscountPercentage)}
+                                onClick={() =>
+                                  updateItem(
+                                    index,
+                                    "discountPercentage",
+                                    item.invoiceDiscountPercentage,
+                                  )
+                                }
                               >
                                 Use Bill ({item.invoiceDiscountPercentage}%)
                               </button>
@@ -2388,14 +3307,34 @@ function InvoiceScanner() {
                               type="number"
                               step="0.1"
                               placeholder="0%"
-                              value={item.discountPercentage !== null ? item.discountPercentage : ""}
-                              onChange={(e) => updateItem(index, "discountPercentage", e.target.value ? Number(e.target.value) : null)}
+                              value={
+                                item.discountPercentage !== null
+                                  ? item.discountPercentage
+                                  : ""
+                              }
+                              onChange={(e) =>
+                                updateItem(
+                                  index,
+                                  "discountPercentage",
+                                  e.target.value
+                                    ? Number(e.target.value)
+                                    : null,
+                                )
+                              }
                             />
-                            {item.discountPercentage !== null && item.discountPercentage > 0 && (
-                              <span className="whitespace-nowrap text-[10px] font-bold text-emerald-700">
-                                Effective: {currency(Math.round(item.sellingPrice * (1 - item.discountPercentage / 100) * 100) / 100)}
-                              </span>
-                            )}
+                            {item.discountPercentage !== null &&
+                              item.discountPercentage > 0 && (
+                                <span className="whitespace-nowrap text-[10px] font-bold text-emerald-700">
+                                  Effective:{" "}
+                                  {currency(
+                                    Math.round(
+                                      item.sellingPrice *
+                                        (1 - item.discountPercentage / 100) *
+                                        100,
+                                    ) / 100,
+                                  )}
+                                </span>
+                              )}
                           </div>
                         </label>
 
@@ -2405,7 +3344,9 @@ function InvoiceScanner() {
                             className="mt-1 text-xs"
                             placeholder="Auto generated"
                             value={item.sku}
-                            onChange={(e) => updateItem(index, "sku", e.target.value)}
+                            onChange={(e) =>
+                              updateItem(index, "sku", e.target.value)
+                            }
                           />
                         </label>
                       </div>
@@ -2413,13 +3354,18 @@ function InvoiceScanner() {
                       {item.showPitchInput && (
                         <div className="rounded-lg border border-slate-200 bg-white p-3">
                           <label className="block text-[11px] font-semibold text-slate-700">
-                            Product Description / AI Pitch Hook <span className="font-normal text-slate-400">(optional)</span>
+                            Product Description / AI Pitch Hook{" "}
+                            <span className="font-normal text-slate-400">
+                              (optional)
+                            </span>
                             <textarea
                               className="mt-1.5 w-full rounded-lg border border-slate-200 p-2.5 text-xs text-slate-800 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
                               rows={2}
                               placeholder="e.g. Inverter battery with 48 months warranty, ideal for power cuts and heavy commercial loads."
                               value={item.description}
-                              onChange={(e) => updateItem(index, "description", e.target.value)}
+                              onChange={(e) =>
+                                updateItem(index, "description", e.target.value)
+                              }
                             />
                           </label>
                         </div>
@@ -2432,22 +3378,41 @@ function InvoiceScanner() {
 
             <div className="flex flex-col justify-between gap-3 border-t border-slate-100 bg-slate-50/70 p-4 sm:flex-row sm:items-center">
               <div className="flex flex-wrap items-center gap-4 text-xs text-slate-600">
-                <span><strong>{activeItems.length}</strong> items selected</span>
+                <span>
+                  <strong>{activeItems.length}</strong> items selected
+                </span>
                 <span>•</span>
-                <span><strong>{totalUnits}</strong> total units</span>
+                <span>
+                  <strong>{totalUnits}</strong> total units
+                </span>
                 <span>•</span>
-                <span>Total Amount: <strong className="text-slate-900">{currency(grandTotal)}</strong></span>
+                <span>
+                  Total Amount:{" "}
+                  <strong className="text-slate-900">
+                    {currency(grandTotal)}
+                  </strong>
+                </span>
                 <span>•</span>
-                <span>Retail Value: <strong className="text-emerald-700">{currency(totalRetailValue)}</strong></span>
+                <span>
+                  Retail Value:{" "}
+                  <strong className="text-emerald-700">
+                    {currency(totalRetailValue)}
+                  </strong>
+                </span>
               </div>
 
               <div className="flex items-center gap-2">
                 <Button variant="secondary" onClick={() => setStep(1)}>
                   Back
                 </Button>
-                <Button disabled={saving || activeItems.length === 0} onClick={() => handleConfirmSave(false)}>
+                <Button
+                  disabled={saving || activeItems.length === 0}
+                  onClick={() => handleConfirmSave(false)}
+                >
                   <Icon name="check" size={16} />
-                  {saving ? "Posting to inventory…" : "Confirm & Post to Inventory"}
+                  {saving
+                    ? "Posting to inventory…"
+                    : "Confirm & Post to Inventory"}
                 </Button>
               </div>
             </div>
@@ -2460,27 +3425,39 @@ function InvoiceScanner() {
           <span className="mx-auto grid size-16 place-items-center rounded-2xl bg-emerald-100 text-emerald-700">
             <Icon name="check" size={32} />
           </span>
-          <h2 className="mt-4 text-2xl font-bold text-slate-900">Purchase Invoice Posted</h2>
+          <h2 className="mt-4 text-2xl font-bold text-slate-900">
+            Purchase Invoice Posted
+          </h2>
           <p className="mx-auto mt-2 max-w-md text-xs leading-6 text-slate-500">
-            Invoice {successResult.invoiceNumber} has been recorded into your database. Stock levels and weighted average purchase costs have been updated.
+            Invoice {successResult.invoiceNumber} has been recorded into your
+            database. Stock levels and weighted average purchase costs have been
+            updated.
           </p>
 
           <div className="mt-6 divide-y divide-slate-100 rounded-xl border border-slate-200 bg-slate-50 text-left text-xs">
             <div className="flex justify-between p-3">
               <span className="text-slate-500">Invoice Number</span>
-              <strong className="text-slate-900">{successResult.invoiceNumber}</strong>
+              <strong className="text-slate-900">
+                {successResult.invoiceNumber}
+              </strong>
             </div>
             <div className="flex justify-between p-3">
               <span className="text-slate-500">Supplier</span>
-              <strong className="text-slate-900">{successResult.supplierName}</strong>
+              <strong className="text-slate-900">
+                {successResult.supplierName}
+              </strong>
             </div>
             <div className="flex justify-between p-3">
               <span className="text-slate-500">Line Items Imported</span>
-              <strong className="text-slate-900">{successResult.itemsCount} products</strong>
+              <strong className="text-slate-900">
+                {successResult.itemsCount} products
+              </strong>
             </div>
             <div className="flex justify-between p-3">
               <span className="text-slate-500">Total Purchase Value</span>
-              <strong className="text-emerald-700">{currency(Number(successResult.totalAmount))}</strong>
+              <strong className="text-emerald-700">
+                {currency(Number(successResult.totalAmount))}
+              </strong>
             </div>
             <div className="flex justify-between p-3">
               <span className="text-slate-500">Status</span>
@@ -2512,10 +3489,15 @@ function InvoiceScanner() {
             <div onMouseDown={(e) => e.stopPropagation()}>
               <div className="flex items-center justify-between border-b border-slate-100 p-4">
                 <div>
-                  <h3 className="font-bold text-slate-900">Original Invoice Document</h3>
+                  <h3 className="font-bold text-slate-900">
+                    Original Invoice Document
+                  </h3>
                   <p className="text-xs text-slate-500">{fileName}</p>
                 </div>
-                <Button variant="ghost" onClick={() => setShowPreviewModal(false)}>
+                <Button
+                  variant="ghost"
+                  onClick={() => setShowPreviewModal(false)}
+                >
                   <Icon name="close" size={16} />
                 </Button>
               </div>
@@ -2530,8 +3512,12 @@ function InvoiceScanner() {
                 ) : (
                   <div className="rounded-xl border border-slate-200 bg-slate-50 p-6 text-xs text-slate-700">
                     <div className="border-b-2 border-slate-900 pb-3 text-center">
-                      <h4 className="text-base font-extrabold uppercase">{supplierName}</h4>
-                      <p className="text-[10px] text-slate-500">GSTIN: {supplierGstin} • Phone: {supplierPhone}</p>
+                      <h4 className="text-base font-extrabold uppercase">
+                        {supplierName}
+                      </h4>
+                      <p className="text-[10px] text-slate-500">
+                        GSTIN: {supplierGstin} • Phone: {supplierPhone}
+                      </p>
                     </div>
                     <div className="my-3 flex justify-between text-[11px]">
                       <div>
@@ -2558,18 +3544,27 @@ function InvoiceScanner() {
                         {items.map((it) => (
                           <tr key={it.id}>
                             <td className="p-2 font-medium">{it.name}</td>
-                            <td className="p-2 text-slate-500">{it.hsnSac || "-"}</td>
-                            <td className="p-2">{it.quantity} {it.unit}</td>
+                            <td className="p-2 text-slate-500">
+                              {it.hsnSac || "-"}
+                            </td>
+                            <td className="p-2">
+                              {it.quantity} {it.unit}
+                            </td>
                             <td className="p-2">{currency(it.unitCost)}</td>
                             <td className="p-2">{it.taxRate}%</td>
-                            <td className="p-2 font-semibold">{currency(it.lineTotal)}</td>
+                            <td className="p-2 font-semibold">
+                              {currency(it.lineTotal)}
+                            </td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
                     <div className="mt-4 flex justify-between border-t border-slate-300 pt-2 text-xs">
                       <div>
-                        <span className="text-slate-500">Subtotal:</span> {currency(subtotal)} • <span className="text-slate-500">Tax:</span> {currency(taxAmount)}
+                        <span className="text-slate-500">Subtotal:</span>{" "}
+                        {currency(subtotal)} •{" "}
+                        <span className="text-slate-500">Tax:</span>{" "}
+                        {currency(taxAmount)}
                       </div>
                       <div className="font-bold text-slate-900">
                         Total Amount: {currency(grandTotal)}
@@ -2580,7 +3575,10 @@ function InvoiceScanner() {
               </div>
 
               <div className="flex justify-end border-t border-slate-100 p-3">
-                <Button variant="secondary" onClick={() => setShowPreviewModal(false)}>
+                <Button
+                  variant="secondary"
+                  onClick={() => setShowPreviewModal(false)}
+                >
                   Close
                 </Button>
               </div>
@@ -2601,17 +3599,40 @@ function InvoiceScanner() {
                   <Icon name="warning" size={24} />
                 </span>
                 <div>
-                  <h3 className="text-base font-bold text-slate-900">Invoice Already Exists</h3>
-                  <p className="text-xs text-slate-500">Duplicate invoice detected for this supplier</p>
+                  <h3 className="text-base font-bold text-slate-900">
+                    Invoice Already Exists
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Duplicate invoice detected for this supplier
+                  </p>
                 </div>
               </div>
 
               <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50/60 p-4 text-xs text-slate-700">
                 <p className="leading-5">
-                  An invoice with number <strong className="font-semibold text-slate-900">{duplicateConflict.invoiceNumber}</strong> from <strong className="font-semibold text-slate-900">{duplicateConflict.supplierName}</strong> was already registered on <strong className="font-semibold text-slate-900">{duplicateConflict.invoiceDate}</strong> for <strong className="font-semibold text-slate-900">{currency(Number(duplicateConflict.totalAmount))}</strong>.
+                  An invoice with number{" "}
+                  <strong className="font-semibold text-slate-900">
+                    {duplicateConflict.invoiceNumber}
+                  </strong>{" "}
+                  from{" "}
+                  <strong className="font-semibold text-slate-900">
+                    {duplicateConflict.supplierName}
+                  </strong>{" "}
+                  was already registered on{" "}
+                  <strong className="font-semibold text-slate-900">
+                    {duplicateConflict.invoiceDate}
+                  </strong>{" "}
+                  for{" "}
+                  <strong className="font-semibold text-slate-900">
+                    {currency(Number(duplicateConflict.totalAmount))}
+                  </strong>
+                  .
                 </p>
                 <p className="mt-2 text-slate-600">
-                  Would you like to update this existing invoice with the current products, pricing, and quantities? Updating preserves the original creation audit trail while recalculating inventory quantities and stock movements.
+                  Would you like to update this existing invoice with the
+                  current products, pricing, and quantities? Updating preserves
+                  the original creation audit trail while recalculating
+                  inventory quantities and stock movements.
                 </p>
               </div>
 
@@ -2629,6 +3650,99 @@ function InvoiceScanner() {
                 >
                   <Icon name="refresh" size={16} />
                   {saving ? "Updating invoice…" : "Update Existing Invoice"}
+                </Button>
+              </div>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {pendingNewScanFile && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm"
+          onMouseDown={() => !cancellingJobs && setPendingNewScanFile(null)}
+        >
+          <Card className="w-full max-w-lg overflow-hidden shadow-2xl">
+            <div onMouseDown={(e) => e.stopPropagation()} className="p-6">
+              <div className="flex items-center gap-3">
+                <span className="grid size-12 shrink-0 place-items-center rounded-2xl bg-amber-100 text-amber-700">
+                  <Icon name="warning" size={24} />
+                </span>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">
+                    Active Invoice Scan in Progress
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Existing background job &amp; Gemini API request detected
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50/60 p-4 text-xs text-slate-700 space-y-2">
+                <p className="leading-5">
+                  You currently have{" "}
+                  {activeJobs.length === 1
+                    ? "an active scan job"
+                    : `${activeJobs.length} active scan jobs`}{" "}
+                  running in the background:
+                </p>
+                <ul className="list-disc pl-4 space-y-1 font-semibold text-slate-900">
+                  {activeJobs.map((j) => (
+                    <li key={j.jobId}>
+                      {j.originalFileName || "Purchase Invoice"}{" "}
+                      <span className="text-amber-700 font-normal">
+                        ({j.status})
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="pt-1 text-slate-600 leading-5">
+                  To start a new scan request for{" "}
+                  <strong className="text-slate-900">
+                    {pendingNewScanFile.file
+                      ? pendingNewScanFile.file.name
+                      : "Sample Invoice"}
+                  </strong>
+                  , can we cancel the existing job and abort its running Gemini
+                  API request too? All cancelled jobs will be updated to{" "}
+                  <strong className="text-rose-700">CANCELLED</strong>.
+                </p>
+              </div>
+
+              <div className="mt-6 flex flex-wrap items-center justify-end gap-2.5">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={cancellingJobs}
+                  onClick={() => setPendingNewScanFile(null)}
+                >
+                  Keep Existing Job
+                </Button>
+                {activeJobs.length === 1 && (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={cancellingJobs}
+                    onClick={() => {
+                      const jobToCheck = activeJobs[0];
+                      setPendingNewScanFile(null);
+                      handleCheckExistingJob(jobToCheck);
+                    }}
+                  >
+                    <Icon name="scan" size={15} />
+                    Check Existing Job
+                  </Button>
+                )}
+                <Button
+                  type="button"
+                  variant="danger"
+                  disabled={cancellingJobs}
+                  onClick={handleConfirmCancelAndScanNew}
+                >
+                  <Icon name="close" size={15} />
+                  {cancellingJobs
+                    ? "Cancelling & Updating Jobs…"
+                    : "Cancel Existing & Start New Scan"}
                 </Button>
               </div>
             </div>
@@ -3206,68 +4320,226 @@ function SuppliersScreen() {
   );
 }
 
-function AIAssistant() {
-  const [messages, setMessages] = useState([{ role: "ai", text: "Hello Amit. I can analyse your inventory, purchases and product movement. What would you like to know?" }]);
+interface AssistantMessage {
+  role: "user" | "ai";
+  text: string;
+  meta?: {
+    modelUsed: string;
+    totalProducts: number;
+    lowStockCount: number;
+    outOfStockCount: number;
+    totalInventoryValuation: number;
+    matchedProducts: MatchedProductContext[];
+  };
+  isError?: boolean;
+}
+
+function AIAssistant({ user }: { user?: User | null }) {
+  const firstName = user?.fullName ? user.fullName.split(" ")[0] : "Partner";
+  const initialGreeting = `Hello ${firstName}. I am connected to ${user?.shopName || "your shop"}'s live inventory, product intelligence embeddings, purchase invoices, and supplier records. Ask me anything about your stock, margins, product specs, or counter sales pitches.`;
+
+  const [messages, setMessages] = useState<AssistantMessage[]>([
+    { role: "ai", text: initialGreeting },
+  ]);
   const [value, setValue] = useState("");
-  const ask = (text: string) => { if(!text.trim()) return; setMessages(m=>[...m,{role:"user",text},{role:"ai",text:"Based on the last 30 days, Aashirvaad Atta and Surf Excel need attention first. At current sales velocity, they may stock out within 6 and 4 days. Reordering 42 and 36 units respectively would provide roughly two weeks of cover."}]); setValue(""); };
+  const [loading, setLoading] = useState(false);
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, loading]);
+
+  const ask = async (rawText: string) => {
+    const text = rawText.trim();
+    if (!text || loading) return;
+
+    const historyToSend = messages.map((m) => ({
+      role: m.role,
+      text: m.text,
+    }));
+
+    setMessages((prev) => [...prev, { role: "user", text }]);
+    setValue("");
+    setLoading(true);
+
+    try {
+      const res: InventoryChatResponse = await chatWithInventory(text, historyToSend);
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "ai",
+          text: res.answer,
+          meta: {
+            modelUsed: res.modelUsed,
+            totalProducts: res.totalProducts,
+            lowStockCount: res.lowStockCount,
+            outOfStockCount: res.outOfStockCount,
+            totalInventoryValuation: Number(res.totalInventoryValuation) || 0,
+            matchedProducts: res.matchedProducts || [],
+          },
+        },
+      ]);
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : "Failed to communicate with inventory assistant.";
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "ai",
+          text: errMsg,
+          isError: true,
+        },
+      ]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <>
       <PageHeader
-        title="AI Assistant"
-        description="Ask evidence-based questions about your inventory."
-        actions={<Button className="text-xs sm:text-sm" onClick={() => setMessages([{ role: "ai", text: "Hello Amit. What inventory questions can I help with today?" }])}><Icon name="plus" size={15} />New conversation</Button>}
+        title="AI Inventory Assistant"
+        description="Chat directly with your live inventory, product specs, purchase bills, and supplier ledger."
+        actions={
+          <Button
+            className="text-xs sm:text-sm"
+            disabled={loading}
+            onClick={() =>
+              setMessages([
+                {
+                  role: "ai",
+                  text: initialGreeting,
+                },
+              ])
+            }
+          >
+            <Icon name="plus" size={15} />
+            New conversation
+          </Button>
+        }
       />
-      <Card className="grid min-h-[550px] sm:min-h-[650px] overflow-hidden lg:grid-cols-[260px_1fr]">
-        <aside className="border-b border-slate-200 bg-slate-50 p-3 sm:p-4 lg:border-b-0 lg:border-r">
-          <p className="px-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">Suggested questions</p>
-          <div className="mt-2 flex lg:flex-col gap-2 overflow-x-auto pb-1 lg:pb-0">
-            {["What should I reorder this week?", "Which items are hurting margin?", "Show my dead stock risk", "Compare supplier prices"].map(q => (
-              <button
-                className="shrink-0 lg:w-full rounded-lg border border-slate-200 bg-white p-2.5 sm:p-3 text-left text-xs font-medium leading-snug text-slate-600 hover:border-emerald-300 hover:text-emerald-700 whitespace-nowrap lg:whitespace-normal"
-                key={q}
-                onClick={() => ask(q)}
-              >
-                {q}
-              </button>
-            ))}
-          </div>
-        </aside>
-        <div className="flex min-w-0 flex-col">
-          <div className="flex-1 space-y-4 overflow-y-auto p-4 sm:p-8">
+      <Card className="flex flex-col min-h-[560px] sm:min-h-[660px] overflow-hidden">
+        <div className="flex min-w-0 flex-1 flex-col max-h-[75vh]">
+          <div className="flex-1 space-y-4 overflow-y-auto p-4 sm:p-6">
             {messages.map((m, i) => (
-              <div className={`flex gap-2.5 sm:gap-3 ${m.role === "user" ? "justify-end" : ""}`} key={i}>
+              <div
+                className={`flex gap-2.5 sm:gap-3 ${m.role === "user" ? "justify-end" : ""}`}
+                key={i}
+              >
                 {m.role === "ai" && (
                   <span className="grid size-7 sm:size-8 shrink-0 place-items-center rounded-lg bg-emerald-600 text-white">
                     <Icon name="spark" size={15} />
                   </span>
                 )}
-                <div className={`max-w-2xl rounded-xl px-3.5 py-2.5 sm:px-4 sm:py-3 text-xs sm:text-sm leading-relaxed ${m.role === "user" ? "bg-slate-900 text-white" : "border border-slate-200 bg-white text-slate-700"}`}>
-                  {m.text}
-                  {m.role === "ai" && i > 0 && (
-                    <div className="mt-2.5 flex flex-wrap gap-1.5 border-t border-slate-100 pt-2.5">
-                      <Badge tone="info">Sales: last 30 days</Badge>
-                      <Badge tone="success">Inventory: live mock data</Badge>
+                <div
+                  className={`max-w-3xl rounded-xl px-3.5 py-2.5 sm:px-4 sm:py-3 text-xs sm:text-sm leading-relaxed ${
+                    m.role === "user"
+                      ? "bg-slate-900 text-white"
+                      : m.isError
+                        ? "border border-rose-200 bg-rose-50 text-rose-700"
+                        : "border border-slate-200 bg-white text-slate-700 shadow-2xs"
+                  }`}
+                >
+                  {m.role === "ai" && !m.isError ? (
+                    <MarkdownRenderer content={m.text} />
+                  ) : (
+                    <div className="whitespace-pre-wrap">{m.text}</div>
+                  )}
+
+                  {m.role === "ai" && m.meta && (
+                    <div className="mt-3 space-y-2.5 border-t border-slate-100 pt-2.5">
+                      {m.meta.matchedProducts && m.meta.matchedProducts.length > 0 && (
+                        <div>
+                          <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">
+                            Matched Catalogue Products
+                          </p>
+                          <div className="grid gap-2 sm:grid-cols-2">
+                            {m.meta.matchedProducts.map((mp) => (
+                              <div
+                                key={mp.id}
+                                className="rounded-lg border border-slate-200/80 bg-slate-50/70 p-2 text-xs"
+                              >
+                                <div className="flex items-start justify-between gap-2">
+                                  <span className="font-semibold text-slate-800 truncate">
+                                    {mp.name}
+                                  </span>
+                                  <Badge
+                                    tone={
+                                      Number(mp.stock) <= 0
+                                        ? "danger"
+                                        : Number(mp.stock) < 10
+                                          ? "warning"
+                                          : "success"
+                                    }
+                                  >
+                                    {Number(mp.stock)} {mp.unit || "Nos"}
+                                  </Badge>
+                                </div>
+                                <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+                                  <span>SKU: {mp.sku}</span>
+                                  <span>·</span>
+                                  <span>Cost: {currency(Number(mp.buyingPrice || 0))}</span>
+                                  <span>·</span>
+                                  <span className="font-semibold text-emerald-700">
+                                    SP: {currency(Number(mp.sellingPrice || 0))}
+                                  </span>
+                                  <span>({Number(mp.marginPercent || 0)}% margin)</span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Badge tone="success">
+                          Live Inventory ({m.meta.totalProducts} items · {currency(m.meta.totalInventoryValuation)})
+                        </Badge>
+                        {m.meta.outOfStockCount > 0 && (
+                          <Badge tone="danger">{m.meta.outOfStockCount} Out of Stock</Badge>
+                        )}
+                        {m.meta.lowStockCount > 0 && (
+                          <Badge tone="warning">{m.meta.lowStockCount} Low Stock</Badge>
+                        )}
+                        <Badge tone="info">{m.meta.modelUsed}</Badge>
+                      </div>
                     </div>
                   )}
                 </div>
               </div>
             ))}
+
+            {loading && (
+              <div className="flex gap-2.5 sm:gap-3">
+                <span className="grid size-7 sm:size-8 shrink-0 place-items-center rounded-lg bg-emerald-600 text-white">
+                  <Icon name="spark" size={15} />
+                </span>
+                <div className="flex items-center gap-2.5 rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs sm:text-sm text-slate-600 shadow-2xs">
+                  <span className="relative flex size-2.5">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex size-2.5 rounded-full bg-emerald-500"></span>
+                  </span>
+                  <span>Analyzing live inventory, embeddings, and invoices…</span>
+                </div>
+              </div>
+            )}
+            <div ref={bottomRef} />
           </div>
-          <div className="border-t border-slate-100 p-3 sm:p-4">
+          <div className="border-t border-slate-100 p-3 sm:p-4 bg-white">
             <div className="flex gap-2">
               <Input
-                placeholder="Ask about stock, margins or suppliers…"
+                placeholder="Ask about stock levels, product specs, margins, invoices, or suppliers…"
                 value={value}
-                onChange={e => setValue(e.target.value)}
-                onKeyDown={e => e.key === "Enter" && ask(value)}
+                disabled={loading}
+                onChange={(e) => setValue(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && ask(value)}
               />
-              <Button onClick={() => ask(value)}>
+              <Button disabled={loading || !value.trim()} onClick={() => ask(value)}>
                 <Icon name="send" size={16} />
-                <span className="hidden sm:inline">Ask</span>
+                <span className="hidden sm:inline">{loading ? "Thinking…" : "Ask"}</span>
               </Button>
             </div>
             <p className="mt-2 text-center text-[10px] text-slate-400">
-              Responses use simulated prototype data and may not reflect real inventory.
+              Connected to real-time shop inventory, hybrid vector embeddings, and purchase invoice records.
             </p>
           </div>
         </div>
@@ -4051,7 +5323,7 @@ export default function App() {
     if (active === "Invoice Scanner") return <InvoiceScanner />;
     if (active === "Invoices" || active === "Purchases") return <InvoicesScreen onNavigate={setActive} />;
     if (active === "Suppliers") return <SuppliersScreen />;
-    if (active === "AI Assistant") return <AIAssistant />;
+    if (active === "AI Assistant") return <AIAssistant user={currentUser} />;
     if (active === "Reports") return <Reports />;
     if (active === "Settings") return <Settings user={currentUser} onShopUpdated={(u) => setCurrentUser(u)} />;
     return <Overview onNavigate={setActive} user={currentUser} onShopCreated={(u) => setCurrentUser(u)} onShowQr={openQrModal} />;
@@ -4084,6 +5356,10 @@ export default function App() {
         onShowQr={(prod) => {
           setScannedProduct(null);
           setQrModalProduct(prod);
+        }}
+        onViewFullDetails={(prod) => {
+          setScannedProduct(null);
+          setActive("Products");
         }}
       />
     )}

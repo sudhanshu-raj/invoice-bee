@@ -18,6 +18,12 @@ export interface ProductDetail {
   hsnSac?: string;
   pitchHook?: string;
   updatedAt?: string;
+  intelligenceStatus?: "IN_PROGRESS" | "COMPLETED" | "FAILED" | "NONE";
+  intelligencePitch?: string;
+  intelligenceDescription?: string;
+  intelligenceSpecifications?: string;
+  sourceUrl?: string;
+  sourceUrls?: string;
 }
 
 export async function fetchProductByQr(token: string): Promise<ProductDetail> {

@@ -70,6 +70,24 @@ public class InvoiceController {
         return ResponseEntity.ok(response);
     }
 
+    @GetMapping("/jobs/active")
+    public ResponseEntity<List<InvoiceJobResponse>> getActiveInvoiceJobs(@AuthenticationPrincipal UserDetails userDetails) {
+        List<InvoiceJobResponse> activeJobs = invoiceService.getActiveInvoiceJobs(userDetails.getUsername());
+        return ResponseEntity.ok(activeJobs);
+    }
+
+    @PostMapping("/jobs/{id}/cancel")
+    public ResponseEntity<InvoiceJobResponse> cancelInvoiceJob(@PathVariable("id") UUID id, @AuthenticationPrincipal UserDetails userDetails) {
+        InvoiceJobResponse response = invoiceService.cancelInvoiceJob(id, userDetails.getUsername());
+        return ResponseEntity.ok(response);
+    }
+
+    @PostMapping("/jobs/cancel-active")
+    public ResponseEntity<List<InvoiceJobResponse>> cancelAllActiveInvoiceJobs(@AuthenticationPrincipal UserDetails userDetails) {
+        List<InvoiceJobResponse> response = invoiceService.cancelAllActiveInvoiceJobs(userDetails.getUsername());
+        return ResponseEntity.ok(response);
+    }
+
     @PostMapping("/save")
     public ResponseEntity<PurchaseInvoiceDto> saveInvoice(
             @Valid @RequestBody SavePurchaseInvoiceRequest request,

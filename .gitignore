@@ -31,3 +31,7 @@ uploads/
 
 **/src/main/resources/test/
 **/src/test/resources/
+
+
+**/__pycache__/
+**/venv/

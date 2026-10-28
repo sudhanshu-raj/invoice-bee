@@ -11,5 +11,8 @@
     <include file="db/changelog/changes/004-create-invoice-jobs.xml"/>
     <include file="db/changelog/changes/005-create-customer-enquiries.xml"/>
     <include file="db/changelog/changes/006-add-customer-enquiry-followups.xml"/>
+    <include file="db/changelog/changes/007-create-item-descriptions-and-embeddings.xml"/>
+    <include file="db/changelog/changes/008-create-product-ingestion-jobs.xml"/>
+    <include file="db/changelog/changes/009-add-source-urls-to-item-descriptions.xml"/>
 
 </databaseChangeLog>

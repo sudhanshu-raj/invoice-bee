@@ -5,6 +5,8 @@ interface InvoiceScanningOverlayProps {
   fileName?: string;
   filePreview?: string | null;
   status?: InvoiceJobStatus | null;
+  onCancel?: () => void;
+  cancelling?: boolean;
 }
 
 const fallbackMessages = [
@@ -21,7 +23,9 @@ const statusToMessage: Record<InvoiceJobStatus, string> = {
   EXTRACTED: "Extracting items, rates, and tax breakdown with AI...",
   POLISHED: "Matching with inventory catalogue...",
   COMPLETED: "Invoice parsed successfully!",
+  SAVED: "Invoice saved to inventory!",
   FAILED: "Scanning failed. Please try again.",
+  CANCELLED: "Scanning cancelled.",
 };
 
 const statusToProgress: Record<InvoiceJobStatus, number> = {
@@ -31,13 +35,17 @@ const statusToProgress: Record<InvoiceJobStatus, number> = {
   EXTRACTED: 75,
   POLISHED: 90,
   COMPLETED: 100,
+  SAVED: 100,
   FAILED: 100,
+  CANCELLED: 100,
 };
 
 export const InvoiceScanningOverlay: React.FC<InvoiceScanningOverlayProps> = ({
   fileName = "Purchase Invoice",
   filePreview = null,
   status = null,
+  onCancel,
+  cancelling = false,
 }) => {
   const [fallbackIndex, setFallbackIndex] = useState(0);
 
@@ -122,10 +130,20 @@ export const InvoiceScanningOverlay: React.FC<InvoiceScanningOverlayProps> = ({
         )}
       </div>
 
-      <div className="mt-4">
+      <div className="mt-4 flex flex-col items-center gap-3">
         <span className="inline-block max-w-[240px] truncate rounded-md bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-600">
           {fileName}
         </span>
+        {onCancel && (
+          <button
+            type="button"
+            disabled={cancelling}
+            onClick={onCancel}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 transition hover:bg-rose-100 disabled:opacity-50"
+          >
+            {cancelling ? "Cancelling job " : "Cancel Scan"}
+          </button>
+        )}
       </div>
     </div>
   );

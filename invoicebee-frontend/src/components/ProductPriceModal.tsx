@@ -6,12 +6,14 @@ interface ProductPriceModalProps {
   product: ProductDetail;
   onClose: () => void;
   onShowQr: (product: ProductDetail) => void;
+  onViewFullDetails?: (product: ProductDetail) => void;
 }
 
 export const ProductPriceModal: React.FC<ProductPriceModalProps> = ({
   product,
   onClose,
   onShowQr,
+  onViewFullDetails,
 }) => {
   const [tab, setTab] = useState<"price" | "details" | "ai">("price");
   const [aiQuestion, setAiQuestion] = useState("");
@@ -19,6 +21,15 @@ export const ProductPriceModal: React.FC<ProductPriceModalProps> = ({
   const [loadingAi, setLoadingAi] = useState(false);
   const [webIntelligence, setWebIntelligence] = useState<ProductWebIntelligence | null>(null);
   const [loadingWeb, setLoadingWeb] = useState(false);
+
+  const parsedSpecs: Record<string, any> = React.useMemo(() => {
+    if (!product.intelligenceSpecifications) return {};
+    try {
+      return JSON.parse(product.intelligenceSpecifications);
+    } catch {
+      return {};
+    }
+  }, [product.intelligenceSpecifications]);
 
   const effectiveSelling = Number(product.discountPrice || product.sellingPrice) || 0;
   const cost = Number(product.buyingPrice || product.lastPurchaseCost) || 0;
@@ -66,6 +77,20 @@ export const ProductPriceModal: React.FC<ProductPriceModalProps> = ({
                 <span className="text-xs font-mono font-medium text-slate-500">
                   {product.sku}
                 </span>
+                {product.intelligenceStatus === "IN_PROGRESS" && (
+                  <span
+                    className="inline-flex items-center gap-1.5 rounded-full bg-rose-50 px-2 py-0.5 border border-rose-200"
+                    title="Job is going on for product data extraction"
+                  >
+                    <span className="relative flex size-2">
+                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-400 opacity-75"></span>
+                      <span className="relative inline-flex size-2 rounded-full bg-rose-500"></span>
+                    </span>
+                    <span className="text-[10px] font-bold text-rose-700 tracking-wide">
+                      Extracting
+                    </span>
+                  </span>
+                )}
               </div>
               <h2 className="mt-1.5 text-base sm:text-lg font-bold text-slate-900 leading-snug">
                 {product.name}
@@ -119,14 +144,27 @@ export const ProductPriceModal: React.FC<ProductPriceModalProps> = ({
               <div className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-4">
                 <div className="flex items-baseline justify-between">
                   <div>
-                    <span className="text-xs font-semibold text-emerald-900">Effective Selling Price</span>
+                    <span className="text-xs font-semibold text-emerald-900">
+                      Effective Selling Price
+                    </span>
                     <div className="flex items-baseline gap-2 mt-0.5">
                       <span className="text-2xl font-black text-emerald-700">
-                        ₹{effectiveSelling.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        ₹
+                        {effectiveSelling.toLocaleString("en-IN", {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}
                       </span>
                       {hasDiscount && (
                         <span className="text-sm font-semibold text-slate-400 line-through">
-                          ₹{Number(product.sellingPrice).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          ₹
+                          {Number(product.sellingPrice).toLocaleString(
+                            "en-IN",
+                            {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            },
+                          )}
                         </span>
                       )}
                     </div>
@@ -140,24 +178,46 @@ export const ProductPriceModal: React.FC<ProductPriceModalProps> = ({
 
                 {product.mrp && product.mrp > effectiveSelling && (
                   <div className="mt-2 text-xs text-slate-500">
-                    MRP: <span className="font-semibold text-slate-700">₹{Number(product.mrp).toLocaleString("en-IN")}</span> (Save ₹{(Number(product.mrp) - effectiveSelling).toLocaleString("en-IN")})
+                    MRP:{" "}
+                    <span className="font-semibold text-slate-700">
+                      ₹{Number(product.mrp).toLocaleString("en-IN")}
+                    </span>{" "}
+                    (Save ₹
+                    {(Number(product.mrp) - effectiveSelling).toLocaleString(
+                      "en-IN",
+                    )}
+                    )
                   </div>
                 )}
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3">
-                  <span className="text-[11px] font-semibold text-slate-500">Last Purchase Cost</span>
+                  <span className="text-[11px] font-semibold text-slate-500">
+                    Last Purchase Cost
+                  </span>
                   <div className="mt-1 text-sm font-bold text-slate-800">
-                    ₹{cost.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    ₹
+                    {cost.toLocaleString("en-IN", {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}
                   </div>
-                  <span className="text-[10px] text-slate-400">Unit: {product.unit || "Nos"}</span>
+                  <span className="text-[10px] text-slate-400">
+                    Unit: {product.unit || "Nos"}
+                  </span>
                 </div>
 
                 <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3">
-                  <span className="text-[11px] font-semibold text-slate-500">Gross Margin</span>
+                  <span className="text-[11px] font-semibold text-slate-500">
+                    Gross Margin
+                  </span>
                   <div className="mt-1 text-sm font-bold text-emerald-700">
-                    ₹{marginAmt.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    ₹
+                    {marginAmt.toLocaleString("en-IN", {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}
                   </div>
                   <span className="text-[10px] font-semibold text-emerald-600">
                     {marginPct > 0 ? `+${marginPct}% margin` : "0% margin"}
@@ -165,17 +225,23 @@ export const ProductPriceModal: React.FC<ProductPriceModalProps> = ({
                 </div>
 
                 <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3">
-                  <span className="text-[11px] font-semibold text-slate-500">Current Stock</span>
+                  <span className="text-[11px] font-semibold text-slate-500">
+                    Current Stock
+                  </span>
                   <div className="mt-1 text-sm font-bold text-slate-900">
                     {product.stock} {product.unit || "Nos"}
                   </div>
-                  <span className={`text-[10px] font-bold ${product.stock > 0 ? "text-emerald-600" : "text-rose-600"}`}>
+                  <span
+                    className={`text-[10px] font-bold ${product.stock > 0 ? "text-emerald-600" : "text-rose-600"}`}
+                  >
                     {product.stock > 0 ? "In Stock" : "Out of Stock"}
                   </span>
                 </div>
 
                 <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3">
-                  <span className="text-[11px] font-semibold text-slate-500">Category & Tax</span>
+                  <span className="text-[11px] font-semibold text-slate-500">
+                    Category & Tax
+                  </span>
                   <div className="mt-1 text-sm font-bold text-slate-800 truncate">
                     {product.category || "General"}
                   </div>
@@ -187,7 +253,9 @@ export const ProductPriceModal: React.FC<ProductPriceModalProps> = ({
 
               {product.pitchHook && (
                 <div className="rounded-xl border border-blue-100 bg-blue-50/50 p-3.5">
-                  <div className="text-[11px] font-bold text-blue-900">Sales Pitch & Hook</div>
+                  <div className="text-[11px] font-bold text-blue-900">
+                    Sales Pitch & Hook
+                  </div>
                   <p className="mt-1 text-xs text-blue-950 leading-relaxed">
                     {product.pitchHook}
                   </p>
@@ -198,38 +266,118 @@ export const ProductPriceModal: React.FC<ProductPriceModalProps> = ({
 
           {tab === "details" && (
             <div className="space-y-3">
+              {product.intelligenceStatus === "IN_PROGRESS" && (
+                <div className="flex items-center gap-2.5 rounded-xl border border-rose-200 bg-rose-50/70 p-3 text-xs text-rose-900">
+                  <span className="relative flex size-2.5 shrink-0">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-400 opacity-75"></span>
+                    <span className="relative inline-flex size-2.5 rounded-full bg-rose-500"></span>
+                  </span>
+                  <div>
+                    <span className="font-bold">
+                      Intelligence Extraction in Progress
+                    </span>
+                    <p className="text-[11px] text-rose-700 mt-0.5">
+                      Scraping official product data and specs
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {product.intelligencePitch && (
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-3.5">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-emerald-900">
+                    Marketing Pitch
+                  </div>
+                  <p className="mt-1 text-xs text-emerald-950 leading-relaxed font-medium">
+                    {product.intelligencePitch}
+                  </p>
+                </div>
+              )}
+
+              {product.intelligenceDescription && (
+                <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3.5">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                    Full Description
+                  </div>
+                  <p className="mt-1 text-xs text-slate-800 leading-relaxed whitespace-pre-line">
+                    {product.intelligenceDescription}
+                  </p>
+                </div>
+              )}
+
+              {Object.keys(parsedSpecs).length > 0 && (
+                <div className="rounded-xl border border-slate-200 bg-white p-3.5">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-2">
+                    Specifications
+                  </div>
+                  <div className="divide-y divide-slate-100 text-xs">
+                    {Object.entries(parsedSpecs).map(([key, val]) => (
+                      <div
+                        key={key}
+                        className="flex justify-between py-1.5 gap-2"
+                      >
+                        <span className="text-slate-500 font-medium shrink-0">
+                          {key}
+                        </span>
+                        <span className="text-slate-800 text-right">
+                          {typeof val === "object"
+                            ? JSON.stringify(val)
+                            : String(val)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-2.5 text-xs">
                 <div className="flex justify-between py-1 border-b border-slate-100">
                   <span className="text-slate-500">Full Product Name</span>
-                  <span className="font-semibold text-slate-800">{product.name}</span>
+                  <span className="font-semibold text-slate-800">
+                    {product.name}
+                  </span>
                 </div>
                 <div className="flex justify-between py-1 border-b border-slate-100">
                   <span className="text-slate-500">Brand</span>
-                  <span className="font-semibold text-slate-800">{product.brand || "—"}</span>
+                  <span className="font-semibold text-slate-800">
+                    {product.brand || "—"}
+                  </span>
                 </div>
                 <div className="flex justify-between py-1 border-b border-slate-100">
                   <span className="text-slate-500">Model / Variant</span>
-                  <span className="font-semibold text-slate-800">{product.model || "—"}</span>
+                  <span className="font-semibold text-slate-800">
+                    {product.model || "—"}
+                  </span>
                 </div>
                 <div className="flex justify-between py-1 border-b border-slate-100">
                   <span className="text-slate-500">Category</span>
-                  <span className="font-semibold text-slate-800">{product.category || "General"}</span>
+                  <span className="font-semibold text-slate-800">
+                    {product.category || "General"}
+                  </span>
                 </div>
                 <div className="flex justify-between py-1 border-b border-slate-100">
                   <span className="text-slate-500">Unit of Measurement</span>
-                  <span className="font-semibold text-slate-800">{product.unit || "PIECE"}</span>
+                  <span className="font-semibold text-slate-800">
+                    {product.unit || "PIECE"}
+                  </span>
                 </div>
                 <div className="flex justify-between py-1 border-b border-slate-100">
                   <span className="text-slate-500">HSN / SAC Code</span>
-                  <span className="font-mono font-semibold text-slate-800">{product.hsnSac || "—"}</span>
+                  <span className="font-mono font-semibold text-slate-800">
+                    {product.hsnSac || "—"}
+                  </span>
                 </div>
                 <div className="flex justify-between py-1 border-b border-slate-100">
                   <span className="text-slate-500">Barcode / SKU</span>
-                  <span className="font-mono font-semibold text-slate-800">{product.sku}</span>
+                  <span className="font-mono font-semibold text-slate-800">
+                    {product.sku}
+                  </span>
                 </div>
                 <div className="flex justify-between py-1">
                   <span className="text-slate-500">QR Token ID</span>
-                  <span className="font-mono text-[10px] text-slate-600 truncate max-w-[200px]">{product.qrToken || "—"}</span>
+                  <span className="font-mono text-[10px] text-slate-600 truncate max-w-[200px]">
+                    {product.qrToken || "—"}
+                  </span>
                 </div>
               </div>
             </div>
@@ -241,21 +389,33 @@ export const ProductPriceModal: React.FC<ProductPriceModalProps> = ({
                 <button
                   type="button"
                   className="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-800 hover:bg-emerald-100"
-                  onClick={() => handleAskAi("Give me an engaging 2-sentence sales pitch for this product to say to the customer.")}
+                  onClick={() =>
+                    handleAskAi(
+                      "Give me an engaging 2-sentence sales pitch for this product to say to the customer.",
+                    )
+                  }
                 >
                   Pitch to Customer
                 </button>
                 <button
                   type="button"
                   className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
-                  onClick={() => handleAskAi("What are the key benefits, ingredients/materials, and uses of this item?")}
+                  onClick={() =>
+                    handleAskAi(
+                      "What are the key benefits, ingredients/materials, and uses of this item?",
+                    )
+                  }
                 >
                   Key Benefits & Uses
                 </button>
                 <button
                   type="button"
                   className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
-                  onClick={() => handleAskAi("What is the typical Indian market retail price range and standard packaging for this?")}
+                  onClick={() =>
+                    handleAskAi(
+                      "What is the typical Indian market retail price range and standard packaging for this?",
+                    )
+                  }
                 >
                   Market Price & Packaging
                 </button>
@@ -267,8 +427,8 @@ export const ProductPriceModal: React.FC<ProductPriceModalProps> = ({
                   className="flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
                   placeholder="Ask anything about this product or request a pitch..."
                   value={aiQuestion}
-                  onChange={e => setAiQuestion(e.target.value)}
-                  onKeyDown={e => e.key === "Enter" && handleAskAi()}
+                  onChange={(e) => setAiQuestion(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleAskAi()}
                 />
                 <button
                   type="button"
@@ -282,13 +442,16 @@ export const ProductPriceModal: React.FC<ProductPriceModalProps> = ({
 
               {loadingAi && (
                 <div className="rounded-xl border border-emerald-100 bg-emerald-50/40 p-4 text-center text-xs text-emerald-800">
-                  Searching SearXNG and synthesizing AI intelligence for {product.name}...
+                  Searching SearXNG and synthesizing AI intelligence for{" "}
+                  {product.name}...
                 </div>
               )}
 
               {aiAnswer && !loadingAi && (
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                  <div className="mb-1 text-[11px] font-bold uppercase tracking-wider text-slate-500">AI Assistant Response</div>
+                  <div className="mb-1 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                    AI Assistant Response
+                  </div>
                   <div className="text-xs text-slate-800 whitespace-pre-line leading-relaxed">
                     {aiAnswer}
                   </div>
@@ -297,7 +460,9 @@ export const ProductPriceModal: React.FC<ProductPriceModalProps> = ({
 
               {webIntelligence && webIntelligence.sources.length > 0 && (
                 <div className="rounded-xl border border-slate-200 bg-white p-3 text-xs">
-                  <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-400">Web Sources (SearXNG)</div>
+                  <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                    Web Sources (SearXNG)
+                  </div>
                   <div className="space-y-1.5">
                     {webIntelligence.sources.slice(0, 3).map((s, idx) => (
                       <a
@@ -318,13 +483,24 @@ export const ProductPriceModal: React.FC<ProductPriceModalProps> = ({
         </div>
 
         <div className="flex items-center justify-between gap-2 border-t border-slate-100 bg-slate-50/70 p-3.5 sm:p-4">
-          <button
-            type="button"
-            className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-50"
-            onClick={() => onShowQr(product)}
-          >
-            <span>View / Print Barcode</span>
-          </button>
+          <div className="flex items-center gap-2 flex-1 sm:flex-none">
+            <button
+              type="button"
+              className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-50"
+              onClick={() => onShowQr(product)}
+            >
+              <span>Barcode / QR</span>
+            </button>
+            {onViewFullDetails && (
+              <button
+                type="button"
+                className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 rounded-xl border border-emerald-300 bg-emerald-50 px-3.5 py-2 text-xs font-bold text-emerald-800 shadow-sm hover:bg-emerald-100"
+                onClick={() => onViewFullDetails(product)}
+              >
+                <span>Full Product Page</span>
+              </button>
+            )}
+          </div>
 
           <button
             type="button"

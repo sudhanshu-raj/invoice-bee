@@ -21,6 +21,12 @@ public record ProductDetailDto(
         UUID qrToken,
         String hsnSac,
         String pitchHook,
-        OffsetDateTime updatedAt
+        OffsetDateTime updatedAt,
+        String intelligenceStatus,
+        String intelligencePitch,
+        String intelligenceDescription,
+        String intelligenceSpecifications,
+        String sourceUrl,
+        String sourceUrls
 ) {
 }

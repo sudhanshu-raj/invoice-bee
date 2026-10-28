@@ -37,7 +37,7 @@ public class InvoiceJob {
     private String originalFileName;
 
     @JdbcTypeCode(SqlTypes.JSON)
-    @Column(name = "result", columnDefinition = "json")
+    @Column(name = "result", columnDefinition = "jsonb")
     private InvoiceScanResponse result;
     
     @Column(name = "failure_message")

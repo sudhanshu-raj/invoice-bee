@@ -55,6 +55,7 @@ public class InvoiceService {
     private final InvoiceJobRepository invoiceJobRepository;
     private final InvoiceProcessingPipeline invoiceProcessingPipeline;
     private final InvoiceJobExecutionService invoiceJobExecutionService;
+    private final ProductIngestionPipeline productIngestionPipeline;
 
     public InvoiceService(
             UserRepository userRepository,
@@ -71,7 +72,8 @@ public class InvoiceService {
             ProductPitchRepository productPitchRepository,
             InvoiceJobRepository invoiceJobRepository,
             InvoiceProcessingPipeline invoiceProcessingPipeline,
-            InvoiceJobExecutionService invoiceJobExecutionService
+            InvoiceJobExecutionService invoiceJobExecutionService,
+            ProductIngestionPipeline productIngestionPipeline
     ) {
         this.userRepository = userRepository;
         this.supplierRepository = supplierRepository;
@@ -88,6 +90,7 @@ public class InvoiceService {
         this.invoiceJobRepository = invoiceJobRepository;
         this.invoiceProcessingPipeline = invoiceProcessingPipeline;
         this.invoiceJobExecutionService = invoiceJobExecutionService;
+        this.productIngestionPipeline = productIngestionPipeline;
     }
 
     public InvoiceJobResponse scanInvoice(MultipartFile file, String userEmail) {
@@ -97,6 +100,20 @@ public class InvoiceService {
         Shop shop = user.getShop();
         if (shop == null) {
             throw new IllegalStateException("User does not have an active shop. Complete shop setup first.");
+        }
+
+        List<InvoiceJobStatus> terminalStatuses = List.of(
+                InvoiceJobStatus.SAVED,
+                InvoiceJobStatus.FAILED,
+                InvoiceJobStatus.CANCELLED
+        );
+        List<InvoiceJob> existingActiveJobs = invoiceJobRepository.findByShopIdAndStatusNotInOrderByCreatedAtDesc(shop.getId(), terminalStatuses);
+        if (!existingActiveJobs.isEmpty()) {
+            LocalDateTime cancelTime = LocalDateTime.now();
+            for (InvoiceJob existingJob : existingActiveJobs) {
+                invoiceProcessingPipeline.cancelJob(existingJob.getId());
+                invoiceJobRepository.updateCancelled(existingJob.getId(), "Cancelled automatically due to new invoice scan request", cancelTime);
+            }
         }
 
         if (file == null || file.isEmpty()) {
@@ -109,7 +126,7 @@ public class InvoiceService {
             InvoiceScanResponse sampleResponse = invoiceJobExecutionService.generateSampleScanResponse(shop.getId());
             invoiceJob.setResult(sampleResponse);
             InvoiceJob saved = invoiceJobRepository.save(invoiceJob);
-            return new InvoiceJobResponse(saved.getId(), saved.getStatus(), saved.getResult());
+            return new InvoiceJobResponse(saved.getId(), saved.getStatus(), saved.getResult(), saved.getOriginalFileName(), saved.getCreatedAt(), saved.getUpdatedAt());
         }
 
         String fileId = UUID.randomUUID().toString();
@@ -148,7 +165,7 @@ public class InvoiceService {
         } else {
             invoiceProcessingPipeline.submitJob(savedEntity.getId());
         }
-        return new InvoiceJobResponse(savedEntity.getId(), savedEntity.getStatus(), null);
+        return new InvoiceJobResponse(savedEntity.getId(), savedEntity.getStatus(), null, savedEntity.getOriginalFileName(), savedEntity.getCreatedAt(), savedEntity.getUpdatedAt());
     }
 
     @Transactional
@@ -235,9 +252,11 @@ public class InvoiceService {
         }
 
         PurchaseInvoice savedInvoice = purchaseInvoiceRepository.save(invoice);
+        List<Product> affectedProducts = new ArrayList<>();
 
         for (SavePurchaseInvoiceItemRequest itemReq : request.getItems()) {
             Product product = resolveProduct(shop, itemReq);
+            affectedProducts.add(product);
 
             ProductPrice price = productPriceRepository.findByProductId(product.getId())
                     .orElseGet(() -> {
@@ -356,6 +375,16 @@ public class InvoiceService {
             stockMovementRepository.save(stockMovement);
         }
 
+        for (Product prod : affectedProducts) {
+            productIngestionPipeline.queueProductIngestion(prod, shop.getId());
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+        if (request.getJobId() != null) {
+            invoiceJobRepository.updateSaved(request.getJobId(), now);
+        }
+        invoiceJobRepository.markCompletedJobsAsSaved(shop.getId(), now);
+
         return new PurchaseInvoiceDto(
                 savedInvoice.getId(),
                 savedInvoice.getInvoiceNumber(),
@@ -381,7 +410,108 @@ public class InvoiceService {
         InvoiceJob invoiceJob = invoiceJobRepository.findByIdAndShopId(id, shop.getId())
                 .orElseThrow(() -> new IllegalArgumentException("Invoice job not found with id: " + id));
 
-        return new InvoiceJobResponse(invoiceJob.getId(), invoiceJob.getStatus(), invoiceJob.getResult());
+        return new InvoiceJobResponse(
+                invoiceJob.getId(),
+                invoiceJob.getStatus(),
+                invoiceJob.getResult(),
+                invoiceJob.getOriginalFileName(),
+                invoiceJob.getCreatedAt(),
+                invoiceJob.getUpdatedAt()
+        );
+    }
+
+    @Transactional(readOnly = true)
+    public List<InvoiceJobResponse> getActiveInvoiceJobs(String userEmail) {
+        User user = userRepository.findByEmail(userEmail)
+                .orElseThrow(() -> new IllegalArgumentException("User not found with email: " + userEmail));
+        Shop shop = user.getShop();
+        if (shop == null) {
+            return List.of();
+        }
+
+        List<InvoiceJobStatus> terminalStatuses = List.of(
+                InvoiceJobStatus.SAVED,
+                InvoiceJobStatus.FAILED,
+                InvoiceJobStatus.CANCELLED
+        );
+
+        List<InvoiceJob> jobs = invoiceJobRepository.findByShopIdAndStatusNotInOrderByCreatedAtDesc(shop.getId(), terminalStatuses);
+        List<InvoiceJobResponse> responses = new ArrayList<>();
+        for (InvoiceJob job : jobs) {
+            responses.add(new InvoiceJobResponse(
+                    job.getId(),
+                    job.getStatus(),
+                    job.getResult(),
+                    job.getOriginalFileName(),
+                    job.getCreatedAt(),
+                    job.getUpdatedAt()
+            ));
+        }
+        return responses;
+    }
+
+    @Transactional
+    public InvoiceJobResponse cancelInvoiceJob(UUID id, String userEmail) {
+        User user = userRepository.findByEmail(userEmail)
+                .orElseThrow(() -> new IllegalArgumentException("User not found with email: " + userEmail));
+        Shop shop = user.getShop();
+        if (shop == null) {
+            throw new IllegalStateException("User does not have an active shop configured.");
+        }
+
+        InvoiceJob invoiceJob = invoiceJobRepository.findByIdAndShopId(id, shop.getId())
+                .orElseThrow(() -> new IllegalArgumentException("Invoice job not found with id: " + id));
+
+        invoiceProcessingPipeline.cancelJob(id);
+        invoiceJobRepository.updateCancelled(id, "Job cancelled by user", LocalDateTime.now());
+        invoiceJob.setStatus(InvoiceJobStatus.CANCELLED);
+        invoiceJob.setFailureMessage("Job cancelled by user");
+        invoiceJob.setUpdatedAt(LocalDateTime.now());
+
+        return new InvoiceJobResponse(
+                invoiceJob.getId(),
+                invoiceJob.getStatus(),
+                invoiceJob.getResult(),
+                invoiceJob.getOriginalFileName(),
+                invoiceJob.getCreatedAt(),
+                invoiceJob.getUpdatedAt()
+        );
+    }
+
+    @Transactional
+    public List<InvoiceJobResponse> cancelAllActiveInvoiceJobs(String userEmail) {
+        User user = userRepository.findByEmail(userEmail)
+                .orElseThrow(() -> new IllegalArgumentException("User not found with email: " + userEmail));
+        Shop shop = user.getShop();
+        if (shop == null) {
+            return List.of();
+        }
+
+        List<InvoiceJobStatus> terminalStatuses = List.of(
+                InvoiceJobStatus.SAVED,
+                InvoiceJobStatus.FAILED,
+                InvoiceJobStatus.CANCELLED
+        );
+
+        List<InvoiceJob> jobs = invoiceJobRepository.findByShopIdAndStatusNotInOrderByCreatedAtDesc(shop.getId(), terminalStatuses);
+        List<InvoiceJobResponse> cancelled = new ArrayList<>();
+        LocalDateTime now = LocalDateTime.now();
+        for (InvoiceJob job : jobs) {
+            invoiceProcessingPipeline.cancelJob(job.getId());
+            invoiceJobRepository.updateCancelled(job.getId(), "Job cancelled by user", now);
+            job.setStatus(InvoiceJobStatus.CANCELLED);
+            job.setFailureMessage("Job cancelled by user");
+            job.setUpdatedAt(now);
+            cancelled.add(new InvoiceJobResponse(
+                    job.getId(),
+                    job.getStatus(),
+                    job.getResult(),
+                    job.getOriginalFileName(),
+                    job.getCreatedAt(),
+                    job.getUpdatedAt()
+            ));
+        }
+        return cancelled;
     }
     
     private Supplier resolveSupplier(Shop shop, SavePurchaseInvoiceRequest request) {

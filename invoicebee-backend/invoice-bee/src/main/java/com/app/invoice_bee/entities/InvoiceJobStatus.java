@@ -8,5 +8,7 @@ public enum InvoiceJobStatus {
     EXTRACTED,
     POLISHED,
     COMPLETED,
+    SAVED,
     FAILED,
+    CANCELLED
 }

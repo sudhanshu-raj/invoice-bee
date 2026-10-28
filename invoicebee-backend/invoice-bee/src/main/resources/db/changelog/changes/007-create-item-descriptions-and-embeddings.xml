@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="007-enable-pgvector" author="invoicebee">
+        <sql>CREATE EXTENSION IF NOT EXISTS vector;</sql>
+    </changeSet>
+
+    <changeSet id="007-create-item-descriptions" author="invoicebee">
+        <createTable tableName="item_descriptions">
+            <column name="id" type="VARCHAR(36)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="product_id" type="VARCHAR(36)">
+                <constraints nullable="false"
+                             foreignKeyName="fk_item_descriptions_product"
+                             references="products(id)"
+                             deleteCascade="true"/>
+            </column>
+            <column name="short_pitch" type="TEXT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="full_description" type="TEXT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="specifications" type="JSONB" defaultValueComputed="'{}'::jsonb">
+                <constraints nullable="false"/>
+            </column>
+            <column name="source_url" type="TEXT"/>
+            <column name="raw_hash" type="VARCHAR(64)"/>
+            <column name="created_at" type="TIMESTAMP WITH TIME ZONE" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="TIMESTAMP WITH TIME ZONE" defaultValueComputed="NOW()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <createIndex tableName="item_descriptions" indexName="idx_item_descriptions_product_id">
+            <column name="product_id"/>
+        </createIndex>
+        <sql>CREATE INDEX idx_item_descriptions_specs ON item_descriptions USING gin (specifications);</sql>
+    </changeSet>
+
+    <changeSet id="007-create-item-embeddings" author="invoicebee">
+        <createTable tableName="item_embeddings">
+            <column name="id" type="BIGINT" autoIncrement="true">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="product_id" type="VARCHAR(36)">
+                <constraints nullable="false"
+                             foreignKeyName="fk_item_embeddings_product"
+                             references="products(id)"
+                             deleteCascade="true"/>
+            </column>
+            <column name="description_id" type="VARCHAR(36)">
+                <constraints nullable="false"
+                             foreignKeyName="fk_item_embeddings_description"
+                             references="item_descriptions(id)"
+                             deleteCascade="true"/>
+            </column>
+            <column name="chunk_type" type="VARCHAR(32)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="content_chunk" type="TEXT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="embedding" type="vector(1024)"/>
+            <column name="metadata" type="JSONB" defaultValueComputed="'{}'::jsonb"/>
+        </createTable>
+        <createIndex tableName="item_embeddings" indexName="idx_item_embeddings_product_id">
+            <column name="product_id"/>
+        </createIndex>
+        <createIndex tableName="item_embeddings" indexName="idx_item_embeddings_description_id">
+            <column name="description_id"/>
+        </createIndex>
+        <sql>CREATE INDEX idx_item_embeddings_vector ON item_embeddings USING hnsw (embedding vector_cosine_ops);</sql>
+    </changeSet>
+
+</databaseChangeLog>

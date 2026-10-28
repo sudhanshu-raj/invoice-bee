@@ -54,12 +54,17 @@ export type InvoiceJobStatus =
   | "EXTRACTED"
   | "POLISHED"
   | "COMPLETED"
-  | "FAILED";
+  | "SAVED"
+  | "FAILED"
+  | "CANCELLED";
 
 export interface InvoiceJobResponse {
   jobId: string;
   status: InvoiceJobStatus;
   result?: InvoiceScanResponse | null;
+  originalFileName?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
 }
 
 export interface SavePurchaseInvoiceItemPayload {
@@ -84,6 +89,7 @@ export interface SavePurchaseInvoiceItemPayload {
 }
 
 export interface SavePurchaseInvoicePayload {
+  jobId?: string;
   invoiceNumber: string;
   invoiceDate: string;
   paymentMode: string;
@@ -185,24 +191,63 @@ export async function getInvoiceJobStatus(jobId: string): Promise<InvoiceJobResp
   return handleResponse<InvoiceJobResponse>(response);
 }
 
-export async function scanInvoiceFile(
-  file?: File | null,
-  onStatusChange?: (status: InvoiceJobStatus) => void
-): Promise<InvoiceScanResponse> {
-  const initial = await startInvoiceScan(file);
-  onStatusChange?.(initial.status);
-
-  if (initial.status === "COMPLETED" && initial.result) {
-    return initial.result;
+export async function getActiveInvoiceJobs(): Promise<InvoiceJobResponse[]> {
+  const token = getToken();
+  if (!token) {
+    return [];
   }
 
-  const jobId = initial.jobId;
+  const response = await fetch("/api/invoices/jobs/active", {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  return handleResponse<InvoiceJobResponse[]>(response);
+}
+
+export async function cancelInvoiceJob(jobId: string): Promise<InvoiceJobResponse> {
+  const token = getToken();
+  if (!token) {
+    throw new Error("You must be logged in to cancel an invoice job.");
+  }
+
+  const response = await fetch(`/api/invoices/jobs/${jobId}/cancel`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  return handleResponse<InvoiceJobResponse>(response);
+}
+
+export async function cancelAllActiveInvoiceJobs(): Promise<InvoiceJobResponse[]> {
+  const token = getToken();
+  if (!token) {
+    throw new Error("You must be logged in to cancel invoice jobs.");
+  }
+
+  const response = await fetch("/api/invoices/jobs/cancel-active", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  return handleResponse<InvoiceJobResponse[]>(response);
+}
+
+export async function pollInvoiceJobUntilComplete(
+  jobId: string,
+  onStatusChange?: (status: InvoiceJobStatus) => void
+): Promise<InvoiceScanResponse> {
   const pollIntervalMs = 2000;
   const timeoutMs = 1200000;
   const startTime = Date.now();
 
   while (Date.now() - startTime < timeoutMs) {
-    await sleep(pollIntervalMs);
     const job = await getInvoiceJobStatus(jobId);
     onStatusChange?.(job.status);
 
@@ -213,12 +258,34 @@ export async function scanInvoiceFile(
       throw new Error("Invoice scan completed but no result was returned.");
     }
 
+    if (job.status === "CANCELLED") {
+      throw new Error("Invoice processing was cancelled.");
+    }
+
     if (job.status === "FAILED") {
       throw new Error("Invoice processing failed. Please check the image and try again.");
     }
+
+    await sleep(pollIntervalMs);
   }
 
   throw new Error("Invoice scan timed out. Please try again.");
+}
+
+export async function scanInvoiceFile(
+  file?: File | null,
+  onStatusChange?: (status: InvoiceJobStatus) => void,
+  onJobCreated?: (job: InvoiceJobResponse) => void
+): Promise<InvoiceScanResponse> {
+  const initial = await startInvoiceScan(file);
+  onJobCreated?.(initial);
+  onStatusChange?.(initial.status);
+
+  if (initial.status === "COMPLETED" && initial.result) {
+    return initial.result;
+  }
+
+  return pollInvoiceJobUntilComplete(initial.jobId, onStatusChange);
 }
 
 export async function savePurchaseInvoice(payload: SavePurchaseInvoicePayload): Promise<PurchaseInvoiceDto> {

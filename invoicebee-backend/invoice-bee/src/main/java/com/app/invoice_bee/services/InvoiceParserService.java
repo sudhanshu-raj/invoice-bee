@@ -225,17 +225,16 @@ public class InvoiceParserService {
     }
 
     public InvoiceData parseOcrTextToInvoiceWithGemini(String rawTextOrName) {
-        return createFallbackInvoiceData();
-//        try {
-//            return geminiChatClient.prompt()
-//                    .system(PARSER_PROMPT2)
-//                    .user(rawTextOrName)
-//                    .call()
-//                    .entity(InvoiceData.class);
-//        } catch (Exception ex) {
-//            log.error("Gemini OCR text AI extraction failed: ", ex);
-//            throw new RuntimeException("Gemini OCR text AI extraction failed", ex);
-//        }
+        try {
+            return geminiChatClient.prompt()
+                    .system(PARSER_PROMPT2)
+                    .user(rawTextOrName)
+                    .call()
+                    .entity(InvoiceData.class);
+        } catch (Exception ex) {
+            log.error("Gemini OCR text AI extraction failed: ", ex);
+            throw new RuntimeException("Gemini OCR text AI extraction failed", ex);
+        }
     }
 
     public InvoiceData parseOcrTextToInvoice(String rawTextOrName, boolean useGemini) {

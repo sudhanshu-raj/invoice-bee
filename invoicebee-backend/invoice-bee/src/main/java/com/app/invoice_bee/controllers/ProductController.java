@@ -15,6 +15,10 @@ import com.app.invoice_bee.repositories.ProductPitchRepository;
 import com.app.invoice_bee.repositories.ProductPriceRepository;
 import com.app.invoice_bee.repositories.ProductRepository;
 import com.app.invoice_bee.repositories.UserRepository;
+import com.app.invoice_bee.entities.ItemDescription;
+import com.app.invoice_bee.entities.ProductIngestionJob;
+import com.app.invoice_bee.repositories.ItemDescriptionRepository;
+import com.app.invoice_bee.repositories.ProductIngestionJobRepository;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -48,6 +52,8 @@ public class ProductController {
     private final ProductPitchRepository productPitchRepository;
     private final UserRepository userRepository;
     private final ProductService productService;
+    private final ItemDescriptionRepository itemDescriptionRepository;
+    private final ProductIngestionJobRepository productIngestionJobRepository;
 
     public ProductController(
             ProductRepository productRepository,
@@ -56,7 +62,9 @@ public class ProductController {
             ProductIdentifierRepository productIdentifierRepository,
             ProductPitchRepository productPitchRepository,
             UserRepository userRepository,
-            ProductService productService
+            ProductService productService,
+            ItemDescriptionRepository itemDescriptionRepository,
+            ProductIngestionJobRepository productIngestionJobRepository
     ) {
         this.productRepository = productRepository;
         this.productPriceRepository = productPriceRepository;
@@ -65,6 +73,8 @@ public class ProductController {
         this.productPitchRepository = productPitchRepository;
         this.userRepository = userRepository;
         this.productService = productService;
+        this.itemDescriptionRepository = itemDescriptionRepository;
+        this.productIngestionJobRepository = productIngestionJobRepository;
     }
 
     @GetMapping
@@ -285,6 +295,36 @@ public class ProductController {
                 .findFirst()
                 .orElse(null);
 
+        Optional<ItemDescription> descOpt = itemDescriptionRepository.findTopByProductIdOrderByCreatedAtDesc(product.getId());
+        String intelligenceStatus = "NONE";
+        String intelligencePitch = null;
+        String intelligenceDescription = null;
+        String intelligenceSpecifications = null;
+        String sourceUrl = null;
+        String sourceUrls = null;
+
+        if (descOpt.isPresent()) {
+            intelligenceStatus = "COMPLETED";
+            ItemDescription desc = descOpt.get();
+            intelligencePitch = desc.getShortPitch();
+            intelligenceDescription = desc.getFullDescription();
+            intelligenceSpecifications = desc.getSpecifications();
+            sourceUrl = desc.getSourceUrl();
+            sourceUrls = desc.getSourceUrls();
+        } else {
+            Optional<ProductIngestionJob> jobOpt = productIngestionJobRepository.findTopByProductIdOrderByCreatedAtDesc(product.getId());
+            if (jobOpt.isPresent()) {
+                ProductIngestionJob.JobStatus status = jobOpt.get().getStatus();
+                if (status == ProductIngestionJob.JobStatus.PENDING || status == ProductIngestionJob.JobStatus.IN_PROGRESS) {
+                    intelligenceStatus = "IN_PROGRESS";
+                } else if (status == ProductIngestionJob.JobStatus.FAILED) {
+                    intelligenceStatus = "FAILED";
+                } else if (status == ProductIngestionJob.JobStatus.COMPLETED) {
+                    intelligenceStatus = "COMPLETED";
+                }
+            }
+        }
+
         return new ProductDetailDto(
                 product.getId(),
                 product.getName(),
@@ -302,7 +342,13 @@ public class ProductController {
                 product.getQrToken(),
                 hsn,
                 pitch,
-                product.getUpdatedAt()
+                product.getUpdatedAt(),
+                intelligenceStatus,
+                intelligencePitch,
+                intelligenceDescription,
+                intelligenceSpecifications,
+                sourceUrl,
+                sourceUrls
         );
     }
 }

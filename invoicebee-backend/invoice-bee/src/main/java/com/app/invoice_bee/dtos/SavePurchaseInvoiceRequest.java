@@ -4,8 +4,11 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotEmpty;
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.UUID;
 
 public class SavePurchaseInvoiceRequest {
+
+    private UUID jobId;
 
     private String invoiceNumber;
 
@@ -38,6 +41,14 @@ public class SavePurchaseInvoiceRequest {
     private List<SavePurchaseInvoiceItemRequest> items;
 
     public SavePurchaseInvoiceRequest() {
+    }
+
+    public UUID getJobId() {
+        return jobId;
+    }
+
+    public void setJobId(UUID jobId) {
+        this.jobId = jobId;
     }
 
     public Boolean getUpdateExisting() {
